@@ -1,5 +1,5 @@
 // sw.js — offline app shell cache
-const CACHE = 'ct-v1';
+const CACHE = 'ct-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -9,6 +9,7 @@ const ASSETS = [
   './js/week.js',
   './js/progression.js',
   './js/templates.js',
+  './js/sync.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -25,9 +26,12 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// cache-first for app shell, network fallback
+// cache-first for the same-origin app shell; never touch cross-origin requests
+// (Google auth/API calls must always hit the network and are never cached).
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
+  const url = new URL(e.request.url);
+  if (url.origin !== self.location.origin) return; // let Google (and other) requests pass through
   e.respondWith(
     caches.match(e.request).then((cached) => cached || fetch(e.request).then((res) => {
       const copy = res.clone();

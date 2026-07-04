@@ -9,8 +9,21 @@ import {
 } from './week.js';
 import { suggestNext, commitExerciseState, fmtWeight, lastPerformance } from './progression.js';
 import { TEMPLATES } from './templates.js';
+import * as store from './store.js';
+import * as sync from './sync.js';
 
 load();
+
+// Auto-push local changes to the cloud sheet (debounced) when connected.
+store.onChange(() => sync.scheduleAutoPush());
+let lastSyncMsg = '';
+sync.onStatus((status, detail) => {
+  if (status === 'synced') { lastSyncMsg = `Synced (${detail.direction}) · ${new Date().toLocaleTimeString()}`; toast(detail.direction === 'pulled' ? 'Pulled from Sheet' : 'Synced to Sheet'); }
+  else if (status === 'error') { lastSyncMsg = 'Sync error: ' + detail; }
+  else if (status === 'signed-out') { lastSyncMsg = ''; }
+  if (currentTab === 'setup') renderSetup();
+  if (currentTab === 'week' && (status === 'synced')) renderWeek();
+});
 
 const viewEl = document.getElementById('view');
 const titleEl = document.getElementById('viewTitle');
@@ -506,10 +519,61 @@ function historyItem(s) {
 }
 
 // ================= SETUP =================
+function syncCardHTML() {
+  const configured = sync.isConfigured();
+  const connected = store.getConnected();
+  const clientId = store.getClientId();
+  const url = sync.sheetUrl();
+  const statusLine = lastSyncMsg ? `<div class="small muted mt">${esc(lastSyncMsg)}</div>` : '';
+  const gisNote = sync.gisReady() ? '' : `<div class="small muted mt">⚠ Google sign-in library not loaded (offline or blocked). Sync will work once you're back online.</div>`;
+
+  const body = !configured
+    ? h`<p class="small muted">Sign in with Google to back up and sync all your data through a Google Sheet you own.
+        First paste your OAuth <b>Client ID</b> (one-time setup — see the README's “Cloud Sync” section).</p>
+      <label class="field"><span>Google OAuth Client ID</span>
+        <input id="gClientId" placeholder="xxxxxxxx.apps.googleusercontent.com" value="${esc(clientId)}" /></label>
+      <button class="btn btn--primary" id="gSaveClient">Save Client ID</button>`
+    : !connected
+    ? h`<p class="small muted">Ready to connect. You'll pick your Google account and grant access to a single spreadsheet the app creates.</p>
+      <button class="btn btn--accent" id="gSignIn">🔗 Sign in with Google</button>
+      <button class="linkbtn mt" id="gEditClient">Change Client ID</button>`
+    : h`<div class="row-between">
+        <div><b>Connected</b><div class="small muted">Last-write-wins · auto-syncs on change</div></div>
+        <span class="pill pill--up">● Google</span>
+      </div>
+      <div class="btn-row mt">
+        <button class="btn btn--sm" id="gSyncNow">↻ Sync now</button>
+        ${url ? `<a class="btn btn--sm btn--ghost" href="${url}" target="_blank" rel="noopener" style="text-align:center;text-decoration:none;line-height:1.6">Open Sheet ↗</a>` : ''}
+      </div>
+      <button class="linkbtn mt" id="gSignOut">Sign out</button>`;
+
+  return h`<div class="card">
+    <div class="card__title"><h2>☁ Cloud sync</h2><span class="card__hint">Google Sheets</span></div>
+    ${body}${statusLine}${gisNote}
+  </div>`;
+}
+
+function wireSyncCard() {
+  const on = (id, ev, fn) => { const el = document.getElementById(id); if (el) el.addEventListener(ev, fn); };
+  on('gSaveClient', 'click', () => {
+    const v = document.getElementById('gClientId').value.trim();
+    if (!v) { toast('Paste your Client ID'); return; }
+    store.setClientId(v); sync.initClient(); toast('Client ID saved'); renderSetup();
+  });
+  on('gEditClient', 'click', () => { store.setConnected(false); store.setClientId(''); renderSetup(); });
+  on('gSignIn', 'click', async () => {
+    try { await sync.signIn(); renderSetup(); }
+    catch (e) { toast('Sign-in cancelled or failed'); }
+  });
+  on('gSignOut', 'click', () => { sync.signOut(); renderSetup(); });
+  on('gSyncNow', 'click', async () => { try { await sync.syncNow(); } catch (e) { toast('Sync failed — check setup'); } });
+}
+
 function renderSetup() {
   const s = get();
   const t = s.settings.targets;
   viewEl.innerHTML = h`
+    ${syncCardHTML()}
     <div class="card">
       <div class="card__title"><h2>Profile</h2></div>
       <div class="field-row">
@@ -564,6 +628,7 @@ function renderSetup() {
     <p class="center small muted">Concurrent Trainer · built from your evidence-based plan</p>
   `;
   renderLibList();
+  wireSyncCard();
 
   document.getElementById('saveSettings').addEventListener('click', () => {
     update((st) => {
@@ -674,6 +739,19 @@ function doImport() {
 
 // ---------- boot ----------
 setTab('week');
+
+// Try to silently restore a Google session and sync (only if previously connected).
+// GIS loads async, so wait for it briefly before attempting resume.
+function attemptResume(triesLeft) {
+  if (!store.getConnected() || !sync.isConfigured()) return;
+  if (!sync.gisReady()) {
+    if (triesLeft > 0) setTimeout(() => attemptResume(triesLeft - 1), 400);
+    return;
+  }
+  sync.initClient();
+  sync.tryResume().then((ok) => { if (ok) sync.syncNow().catch(() => {}); });
+}
+window.addEventListener('load', () => attemptResume(15));
 
 // service worker for offline / installable
 if ('serviceWorker' in navigator) {

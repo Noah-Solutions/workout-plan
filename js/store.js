@@ -34,9 +34,13 @@ function seedExercises() {
   ];
 }
 
+function nowISO() { return new Date().toISOString(); }
+
 function defaults() {
   return {
     version: 1,
+    rev: 0,                 // bumped on every local mutation
+    updatedAt: nowISO(),    // wall-clock of last local mutation (last-write-wins key)
     settings: {
       bodyweightKg: 80,
       units: 'lb',
@@ -71,9 +75,11 @@ export function load() {
       state.proteinLog = state.proteinLog || {};
       state.exercises = state.exercises || d.exercises;
       state.sessions = state.sessions || [];
+      if (state.rev == null) state.rev = 0;
+      if (!state.updatedAt) state.updatedAt = nowISO();
     } else {
       state = defaults();
-      save();
+      save(true);
     }
   } catch (err) {
     console.error('Failed to load state, resetting', err);
@@ -82,22 +88,56 @@ export function load() {
   return state;
 }
 
-export function save() {
+// change listeners (used by the cloud-sync layer to auto-push)
+const listeners = [];
+export function onChange(cb) { listeners.push(cb); return () => { const i = listeners.indexOf(cb); if (i >= 0) listeners.splice(i, 1); }; }
+function notify() { listeners.forEach((f) => { try { f(); } catch (e) { console.error(e); } }); }
+
+export function save(silent) {
   try {
     localStorage.setItem(KEY, JSON.stringify(state));
   } catch (err) {
     console.error('Save failed', err);
   }
+  if (!silent) notify();
 }
 
 export function get() { return state || load(); }
 
+// A user mutation: bumps revision + timestamp, then notifies (triggers auto-push).
 export function update(fn) {
   const s = get();
   fn(s);
+  s.rev = (s.rev || 0) + 1;
+  s.updatedAt = nowISO();
   save();
   return s;
 }
+
+// Adopt remote state pulled from the cloud. Does NOT bump rev and does NOT
+// notify listeners, so pulling never triggers a push-back loop.
+export function applyRemote(remote) {
+  const s = get();
+  if (Array.isArray(remote.sessions)) s.sessions = remote.sessions;
+  if (Array.isArray(remote.exercises)) s.exercises = remote.exercises;
+  if (remote.proteinLog && typeof remote.proteinLog === 'object') s.proteinLog = remote.proteinLog;
+  if (remote.settings && typeof remote.settings === 'object') {
+    const d = defaults();
+    s.settings = Object.assign({}, d.settings, remote.settings);
+    s.settings.targets = Object.assign({}, d.settings.targets, remote.settings.targets || {});
+  }
+  if (remote.updatedAt) s.updatedAt = remote.updatedAt;
+  if (remote.rev != null) s.rev = remote.rev;
+  save(true);
+}
+
+// Google Client ID + connection flag live OUTSIDE synced state (never pushed to the sheet).
+const GKEY = 'ct_google_clientid';
+const CKEY = 'ct_google_connected';
+export function getClientId() { return localStorage.getItem(GKEY) || ''; }
+export function setClientId(id) { localStorage.setItem(GKEY, (id || '').trim()); }
+export function getConnected() { return localStorage.getItem(CKEY) === '1'; }
+export function setConnected(v) { localStorage.setItem(CKEY, v ? '1' : '0'); }
 
 export function exportJSON() {
   return JSON.stringify(get(), null, 2);
