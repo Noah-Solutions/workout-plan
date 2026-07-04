@@ -45,11 +45,22 @@ python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
-**On your phone (recommended): GitHub Pages**
-1. Push this branch and merge to your default branch (or enable Pages on this branch).
-2. Repo → Settings → Pages → deploy from branch → root.
-3. Open the Pages URL on your phone → Share → **Add to Home Screen**. It now runs full-screen, offline.
+### Auto-deploy to GitHub Pages
 
+`.github/workflows/deploy.yml` publishes the app to GitHub Pages automatically on every push to
+the default branch (and on manual dispatch). No build step — the repo is uploaded as-is.
+
+**One-time setup** (required — the CI token isn't allowed to enable Pages itself):
+
+1. Repo → **Settings → Pages → Build and deployment → Source → "GitHub Actions"**.
+2. Re-run the latest **Deploy to GitHub Pages** workflow (Actions tab → the run → *Re-run jobs*),
+   or push any commit. From then on it deploys on every push, hands-off.
+3. Open the Pages URL on your phone → Share → **Add to Home Screen** → runs full-screen & offline.
+
+> **Private repos:** GitHub Pages on a private repo requires a paid plan (Pro/Team/Enterprise).
+> On the Free plan, either upgrade or make the repo public to use Pages. Everything else
+> (local hosting, the app itself) works regardless.
+>
 > Service workers require HTTPS (GitHub Pages provides it) or `localhost`. Opening `index.html`
 > directly via `file://` won't load ES modules — serve it over HTTP.
 
