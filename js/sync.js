@@ -1,10 +1,12 @@
 // sync.js — two-way sync with a personal REST backend (Cloudflare Worker).
 //
 // Design: local-first. localStorage is the working copy; the server holds one
-// JSON blob (the whole state). Conflict resolution is last-write-wins by the
-// `updatedAt` timestamp. Auth is a single shared bearer token — no accounts,
-// no OAuth. See server/ for the backend.
-import { get, applyRemote, getServerUrl, getToken, getConnected, setConnected } from './store.js';
+// JSON blob (the whole state). Every sync pulls the server copy, does a
+// FIELD-LEVEL MERGE into local (per-session / per-day / per-exercise, newer
+// record wins — see store.mergeRemote), then pushes the merged result back if
+// it differs from the server. Auth is a single shared bearer token — no
+// accounts, no OAuth. See server/ for the backend.
+import { get, mergeRemote, getServerUrl, getToken, getConnected, setConnected } from './store.js';
 
 let statusListeners = [];
 export function onStatus(cb) { statusListeners.push(cb); }
@@ -50,37 +52,33 @@ export async function connect() {
 
 export function disconnect() { setConnected(false); emit('disconnected'); }
 
-// Two-way sync: whichever side has the newer updatedAt wins the whole dataset.
+// Two-way sync: pull, merge record-by-record, push the merged result back if
+// it holds anything the server copy doesn't. Neither device's day is lost.
 export async function syncNow() {
   if (!isConfigured()) throw new Error('not-configured');
   emit('working', 'Syncing…');
   try {
     const remote = await pull();
-    const local = get();
-    const remoteTime = remote && remote.updatedAt ? Date.parse(remote.updatedAt) : 0;
-    const localTime = local.updatedAt ? Date.parse(local.updatedAt) : 0;
-
-    if (remoteTime > localTime) {
-      applyRemote(remote);        // remote newer -> adopt locally (no push-back)
-      emit('synced', { direction: 'pulled', at: remote.updatedAt });
-      return 'pulled';
-    }
-    await push();                 // local newer (or server empty) -> push up
-    emit('synced', { direction: 'pushed', at: local.updatedAt });
-    return 'pushed';
+    const { changedLocal, pushNeeded } = mergeRemote(remote);
+    if (pushNeeded) await push();
+    const direction = pushNeeded && changedLocal ? 'merged'
+      : pushNeeded ? 'pushed' : changedLocal ? 'pulled' : 'up-to-date';
+    emit('synced', { direction, at: get().updatedAt });
+    return direction;
   } catch (e) {
     emit('error', e.message || String(e));
     throw e;
   }
 }
 
-// Debounced auto-push after local changes (only when connected).
+// Debounced auto-sync after local changes (only when connected). A full
+// pull-merge-push (not a blind push) so we never clobber changes another
+// device landed since our last sync.
 let pushTimer = null;
 export function scheduleAutoPush() {
   if (!getConnected() || !isConfigured()) return;
   clearTimeout(pushTimer);
   pushTimer = setTimeout(async () => {
-    try { await push(); emit('synced', { direction: 'pushed', at: get().updatedAt }); }
-    catch (e) { emit('error', e.message || String(e)); }
+    try { await syncNow(); } catch (e) { /* syncNow already emitted the error */ }
   }, 2000);
 }

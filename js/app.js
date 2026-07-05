@@ -5,7 +5,7 @@ import {
 } from './store.js';
 import {
   aggregateWeek, weekRange, weekStart, toISODate, fmtWeekLabel, fmtDate, todayISO,
-  proteinTarget, ACTIVITY_MAP,
+  proteinTarget, ACTIVITY_MAP, isHardSet, entryExercise,
 } from './week.js';
 import { suggestNext, commitExerciseState, fmtWeight, lastPerformance, guidedTarget, applyWorkoutResult, warmupSets } from './progression.js';
 import { TEMPLATES } from './templates.js';
@@ -18,15 +18,21 @@ import * as timer from './timer.js';
 
 load();
 
-// Auto-push local changes to the sync server (debounced) when connected.
+// Auto-sync local changes to the server (debounced pull-merge-push) when connected.
 store.onChange(() => sync.scheduleAutoPush());
+// Persisting can fail (storage full) — losing logs silently is not acceptable.
+store.onSaveError(() => toast('⚠️ Save failed — storage may be full. Export a backup from Setup now.'));
 let lastSyncMsg = '';
 sync.onStatus((status, detail) => {
-  if (status === 'synced') { lastSyncMsg = `Synced (${detail.direction}) · ${new Date().toLocaleTimeString()}`; toast(detail.direction === 'pulled' ? 'Pulled from server' : 'Synced to server'); }
+  if (status === 'synced') {
+    lastSyncMsg = `Synced (${detail.direction}) · ${new Date().toLocaleTimeString()}`;
+    const msg = { pulled: 'Pulled from server', merged: 'Merged with server', pushed: 'Synced to server' }[detail.direction];
+    if (msg) toast(msg);
+  }
   else if (status === 'error') { lastSyncMsg = 'Sync error: ' + detail; }
   else if (status === 'disconnected') { lastSyncMsg = ''; }
   if (currentTab === 'setup') renderSetup();
-  if (currentTab === 'week' && status === 'synced') renderWeek();
+  if (currentTab === 'week' && status === 'synced' && detail.direction !== 'up-to-date') renderWeek();
 });
 
 const viewEl = document.getElementById('view');
@@ -254,12 +260,15 @@ function renderWeek() {
     </div>
 
     ${checkinCardHTML()}
+    ${backupNudgeHTML()}
 
     <button class="btn btn--primary" id="goLog">＋ Log a session</button>
   `;
 
   document.getElementById('goLog').addEventListener('click', () => { draft = null; setTab('log'); });
   document.getElementById('addProtein').addEventListener('click', proteinPrompt);
+  const nudgeBtn = document.getElementById('nudgeExport');
+  if (nudgeBtn) nudgeBtn.addEventListener('click', () => { doExport(); renderWeek(); });
   viewEl.querySelectorAll('[data-checkin]').forEach((b) => b.addEventListener('click', () => openCheckin(todayISO(), b.dataset.checkin)));
   const startBtn = document.getElementById('heroStart');
   if (startBtn) startBtn.addEventListener('click', () => startWorkout(nextTemplate()));
@@ -305,7 +314,7 @@ function checkinCardHTML() {
   const j = get().journal[todayISO()];
   const mDone = morningDone(j), eDone = eveningDone(j);
   const mStatus = mDone
-    ? [j.sleepDiff ? `Sleep ${j.sleepDiff}/5` : null, j.bw != null ? fmtBw(j.bw) : null].filter(Boolean).join(' · ') || 'Logged'
+    ? [j.sleepMin != null ? fmtSleepMin(j.sleepMin) : null, j.sleepDiff ? `Sleep ${j.sleepDiff}/5` : null, j.bw != null ? fmtBw(j.bw) : null].filter(Boolean).join(' · ') || 'Logged'
     : "Last night's sleep";
   const eStatus = eDone
     ? [j.drinks != null ? `${j.drinks} drink${j.drinks === 1 ? '' : 's'}` : null, j.stress ? `stress ${j.stress}/5` : null].filter(Boolean).join(' · ') || 'Logged'
@@ -321,6 +330,24 @@ function checkinCardHTML() {
       <span class="checkin-row__ico">🌙</span>
       <div class="checkin-row__body"><div class="checkin-row__t">Evening ${eDone ? '<span class="checkin-tick">✓</span>' : ''}</div><div class="small muted">${esc(eStatus)}</div></div>
       <button class="btn btn--sm ${eDone ? 'btn--ghost' : ''}" data-checkin="evening">${eDone ? 'Edit' : 'Log'}</button>
+    </div>
+  </div>`;
+}
+
+// Gentle backup reminder: months of logs living only in localStorage is a
+// dataset one cleared cache away from gone. Quiet when cloud sync is on.
+const BACKUP_KEY = 'ct_last_backup';
+function backupNudgeHTML() {
+  if (store.getConnected() && sync.isConfigured()) return '';
+  const s = get();
+  if (s.sessions.length + Object.keys(s.journal).length < 3) return '';
+  const last = Number(localStorage.getItem(BACKUP_KEY)) || 0;
+  if (last && Date.now() - last < 30 * 24 * 3600 * 1000) return '';
+  return h`<div class="card">
+    <div class="row-between">
+      <div><b>💾 Back up your data</b>
+        <div class="small muted">${last ? 'Over a month since your last backup.' : 'Your logs live only on this device.'}</div></div>
+      <button class="btn btn--sm" id="nudgeExport">⬇ Back up</button>
     </div>
   </div>`;
 }
@@ -400,6 +427,7 @@ function startWorkout(tpl) {
   workout = {
     templateName: tpl.name,
     date: todayISO(),
+    startedAt: new Date().toISOString(),
     exercises: exs.map((ex) => {
       const t = guidedTarget(ex);
       return {
@@ -539,26 +567,44 @@ function addExerciseToWorkout() {
   }));
 }
 
+// Difficulty rating -> approximate reps-in-reserve, so guided sets keep an
+// effort signal for analysis instead of a blank RIR.
+const DIFF_RIR = { easy: 3, good: 2, hard: 1, failed: 0 };
+
 function finishWorkout() {
   const done = workout.exercises.filter((w) => w.sets.some((s) => s.done));
   if (!done.length) { toast('Complete at least one set'); return; }
+  const now = new Date().toISOString();
   const summary = [];
   update((s) => {
     const entries = done.map((w) => {
       const ex = s.exercises.find((e) => e.id === w.exerciseId);
-      const sets = w.sets.filter((st) => st.done).map((st) => ({
-        weight: w.unit === 'bw' ? 0 : w.weight, reps: Number(st.reps), rir: '',
+      const rir = w.difficulty != null && DIFF_RIR[w.difficulty] != null ? DIFF_RIR[w.difficulty] : '';
+      // keep EVERY planned set — missed ones as reps 0 — so planned-vs-completed
+      // compliance survives into history and the CSV.
+      const sets = w.sets.map((st) => ({
+        weight: w.unit === 'bw' ? 0 : w.weight,
+        reps: st.done ? Number(st.reps) : 0,
+        rir: st.done ? rir : '',
+        completed: !!st.done,
       }));
       let outcome = null;
-      if (ex) outcome = applyWorkoutResult(ex, sets, w.difficulty);
+      if (ex) {
+        outcome = applyWorkoutResult(ex, sets, w.difficulty);
+        ex._u = now; // per-record stamp for merge sync
+      }
       if (ex && outcome) summary.push({ name: ex.name, ...outcome, unit: w.unit });
       return {
         exerciseId: w.exerciseId,
-        exSnapshot: ex ? { name: ex.name, muscles: ex.muscles, pattern: ex.pattern } : null,
+        exSnapshot: ex ? { name: ex.name, muscles: ex.muscles, pattern: ex.pattern, unit: ex.unit } : null,
+        target: { sets: w.sets.length, reps: w.targetReps, weight: w.unit === 'bw' ? 0 : w.weight },
         sets, difficulty: w.difficulty,
       };
     });
-    s.sessions.push({ id: uid(), kind: 'strength', date: workout.date, templateName: workout.templateName, entries, note: '' });
+    s.sessions.push({
+      id: uid(), kind: 'strength', date: workout.date, templateName: workout.templateName,
+      entries, note: '', startedAt: workout.startedAt, finishedAt: now, updatedAt: now,
+    });
   });
   workout = null;
   timer.stop();
@@ -603,10 +649,24 @@ function startDraft(kind) {
 }
 
 // Open the daily check-in for a date & part (pre-filled if one exists). Jumps to Log.
+// The morning check-in also surfaces YESTERDAY's alcohol (people rarely log it
+// the same evening); it's stored on the day it was drunk, so the
+// drinks -> next-morning-sleep correlation stays clean.
 function openCheckin(date, part) {
   date = date || todayISO();
-  draft = { kind: 'journal', part: part || defaultCheckinPart(), date, entry: { ...(get().journal[date] || {}) } };
+  const yd = get().journal[addDaysISO(date, -1)] || {};
+  draft = {
+    kind: 'journal', part: part || defaultCheckinPart(), date,
+    entry: { ...(get().journal[date] || {}) },
+    yDrinks: yd.drinks ?? null, yDrinks0: yd.drinks ?? null,
+  };
   if (currentTab === 'log') renderDraft(); else setTab('log');
+}
+
+function addDaysISO(iso, n) {
+  const d = new Date(iso + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return toISODate(d);
 }
 
 function renderDraft() {
@@ -753,21 +813,36 @@ function applyTemplate(tpl) {
 function saveStrengthDraft() {
   const filled = draft.entries.filter((en) => en.sets.some((st) => Number(st.reps) > 0));
   if (!filled.length) { toast('Log at least one set with reps'); return; }
+  const editing = !!draft.editId;
+  const now = new Date().toISOString();
   update((s) => {
     const entries = filled.map((en) => {
       const ex = exerciseById(en.exerciseId);
       const sets = en.sets.filter((st) => Number(st.reps) > 0).map((st) => ({
         weight: st.weight === '' ? 0 : Number(st.weight), reps: Number(st.reps), rir: st.rir === '' ? '' : Number(st.rir),
       }));
-      if (ex) commitExerciseState(ex, sets);
-      return { exerciseId: en.exerciseId, exSnapshot: ex ? { name: ex.name, muscles: ex.muscles, pattern: ex.pattern } : null, sets };
+      // editing a past session is a historical correction — don't move current targets
+      if (ex && !editing) { commitExerciseState(ex, sets); ex._u = now; }
+      return {
+        exerciseId: en.exerciseId,
+        exSnapshot: ex ? { name: ex.name, muscles: ex.muscles, pattern: ex.pattern, unit: ex.unit }
+          : (en.exSnapshot || null),
+        sets,
+      };
     });
-    s.sessions.push({ id: uid(), kind: 'strength', date: draft.date, entries, note: draft.note });
+    if (editing) {
+      const sess = s.sessions.find((x) => x.id === draft.editId);
+      if (sess) { sess.date = draft.date; sess.entries = entries; sess.note = draft.note; sess.updatedAt = now; }
+    } else {
+      s.sessions.push({ id: uid(), kind: 'strength', date: draft.date, entries, note: draft.note, loggedAt: now, updatedAt: now });
+    }
   });
-  draft = null; toast('Session saved'); setTab('week');
+  draft = null; toast(editing ? 'Session updated' : 'Session saved'); setTab('week');
 }
 
 // ---- cardio draft ----
+function distUnit() { return get().settings.units === 'kg' ? 'km' : 'mi'; }
+
 function renderCardioDraft() {
   const isInt = draft.cardioType === 'interval';
   viewEl.innerHTML = h`
@@ -776,22 +851,41 @@ function renderCardioDraft() {
       <p class="muted small">${isInt ? 'Hard efforts — talking broken into a few words.' : 'Easy & conversational. Builds your aerobic base with low fatigue cost.'}</p>
       <label class="field"><span>Date</span><input type="date" id="cDate" value="${draft.date}" /></label>
       <label class="field"><span>Duration (minutes)</span><input type="number" inputmode="numeric" id="cDur" value="${draft.durationMin}" /></label>
-      <label class="field"><span>Average HR (optional)</span><input type="number" inputmode="numeric" id="cHR" value="${draft.avgHR}" placeholder="bpm" /></label>
+      <div class="field-row">
+        <label class="field"><span>Average HR (optional)</span><input type="number" inputmode="numeric" id="cHR" value="${draft.avgHR ?? ''}" placeholder="bpm" /></label>
+        <label class="field"><span>Distance (${distUnit()}, optional)</span><input type="number" inputmode="decimal" id="cDist" value="${draft.distance ?? ''}" placeholder="0.0" /></label>
+      </div>
+      <label class="field"><span>Effort (RPE 1 easy – 10 max, optional)</span><input type="number" inputmode="numeric" id="cRpe" min="1" max="10" value="${draft.rpe ?? ''}" placeholder="1–10" /></label>
       <label class="field"><span>Note (optional)</span><input type="text" id="cNote" value="${esc(draft.note)}" /></label>
     </div>
     <div class="btn-row">
       <button class="btn btn--ghost" id="cancelDraft">Cancel</button>
-      <button class="btn btn--primary" id="saveCardio">Save</button>
+      <button class="btn btn--primary" id="saveCardio">${draft.editId ? 'Update' : 'Save'}</button>
     </div>`;
   document.getElementById('cancelDraft').addEventListener('click', () => { draft = null; renderLog(); });
   document.getElementById('saveCardio').addEventListener('click', () => {
     const dur = Number(document.getElementById('cDur').value) || 0;
     if (dur <= 0) { toast('Enter a duration'); return; }
-    update((s) => s.sessions.push({
-      id: uid(), kind: 'cardio', cardioType: draft.cardioType, date: document.getElementById('cDate').value,
-      durationMin: dur, avgHR: Number(document.getElementById('cHR').value) || null, note: document.getElementById('cNote').value,
-    }));
-    draft = null; toast('Cardio saved'); setTab('week');
+    const now = new Date().toISOString();
+    const rpeRaw = Number(document.getElementById('cRpe').value);
+    const data = {
+      kind: 'cardio', cardioType: draft.cardioType, date: document.getElementById('cDate').value,
+      durationMin: dur, avgHR: Number(document.getElementById('cHR').value) || null,
+      distance: Number(document.getElementById('cDist').value) || null, distanceUnit: distUnit(),
+      rpe: rpeRaw >= 1 && rpeRaw <= 10 ? rpeRaw : null,
+      note: document.getElementById('cNote').value, updatedAt: now,
+    };
+    if (data.distance == null) data.distanceUnit = null;
+    update((s) => {
+      if (draft.editId) {
+        const sess = s.sessions.find((x) => x.id === draft.editId);
+        if (sess) Object.assign(sess, data);
+      } else {
+        s.sessions.push({ id: uid(), loggedAt: now, ...data });
+      }
+    });
+    const edited = !!draft.editId;
+    draft = null; toast(edited ? 'Cardio updated' : 'Cardio saved'); setTab('week');
   });
 }
 
@@ -810,28 +904,79 @@ function renderActivityDraft() {
     </div>
     <div class="btn-row">
       <button class="btn btn--ghost" id="cancelDraft">Cancel</button>
-      <button class="btn btn--primary" id="saveAct">Save</button>
+      <button class="btn btn--primary" id="saveAct">${draft.editId ? 'Update' : 'Save'}</button>
     </div>`;
   document.getElementById('aType').addEventListener('change', (e) => { draft.activity = e.target.value; draft.durationMin = Number(document.getElementById('aDur').value) || draft.durationMin; renderActivityDraft(); });
   document.getElementById('cancelDraft').addEventListener('click', () => { draft = null; renderLog(); });
   document.getElementById('saveAct').addEventListener('click', () => {
     const dur = Number(document.getElementById('aDur').value) || 0;
     if (dur <= 0) { toast('Enter a duration'); return; }
-    update((s) => s.sessions.push({
-      id: uid(), kind: 'activity', activity: draft.activity, date: document.getElementById('aDate').value,
-      durationMin: dur, note: document.getElementById('aNote').value,
-    }));
-    draft = null; toast('Activity saved'); setTab('week');
+    const now = new Date().toISOString();
+    const data = {
+      kind: 'activity', activity: draft.activity, date: document.getElementById('aDate').value,
+      durationMin: dur, note: document.getElementById('aNote').value, updatedAt: now,
+    };
+    update((s) => {
+      if (draft.editId) {
+        const sess = s.sessions.find((x) => x.id === draft.editId);
+        if (sess) Object.assign(sess, data);
+      } else {
+        s.sessions.push({ id: uid(), loggedAt: now, ...data });
+      }
+    });
+    const edited = !!draft.editId;
+    draft = null; toast(edited ? 'Activity updated' : 'Activity saved'); setTab('week');
   });
 }
 
 // ---- daily check-in / journal draft ----
 // The daily check-in is one record per day, captured in two moments:
-//   morning  → last night's sleep + how you woke up (sleep, bodyweight, energy, soreness)
-//   evening  → the day itself (drinks, stress, pre-sleep activity, notes)
-function morningDone(j) { return !!(j && (j.sleepDiff || j.bw != null || j.energy || j.soreness || (j.amNote || '').trim())); }
-function eveningDone(j) { return !!(j && (j.drinks != null || j.stress || (j.preSleep || '').trim() || (j.notes || '').trim())); }
+//   morning  → last night's sleep (times + difficulty), weigh-in, resting HR,
+//              waist, energy, soreness, pain areas, yesterday's alcohol
+//   evening  → the day itself (drinks, caffeine, calories, stress, flags,
+//              pre-sleep activity, notes)
+function morningDone(j) {
+  return !!(j && (j.sleepDiff || j.bw != null || j.bedTime || j.wakeTime || j.rhr != null ||
+    j.waist != null || j.energy || j.soreness || (j.pain || []).length || (j.amNote || '').trim()));
+}
+function eveningDone(j) {
+  return !!(j && (j.drinks != null || j.caffeine != null || j.kcal != null || j.stress ||
+    (j.flags || []).length || (j.preSleep || '').trim() || (j.notes || '').trim()));
+}
 function defaultCheckinPart() { return new Date().getHours() < 14 ? 'morning' : 'evening'; }
+
+const PAIN_AREAS = ['Neck', 'Shoulder', 'Elbow', 'Wrist', 'Lower back', 'Hip', 'Knee', 'Ankle'];
+const DAY_FLAGS = [{ k: 'sick', label: '🤒 Sick' }, { k: 'travel', label: '✈️ Travel' }, { k: 'rest', label: '😴 Rest day' }];
+
+// Multi-select chip row; toggles values in draft.entry[name] (an array).
+function chipsHTML(name, options, selected) {
+  const sel = selected || [];
+  return `<div class="rating__btns" style="flex-wrap:wrap">${options.map((o) => {
+    const val = o.k || o, label = o.label || o;
+    return `<button type="button" class="ratebtn ${sel.includes(val) ? 'is-sel' : ''}" style="flex:0 0 auto;padding:6px 12px;width:auto" data-chip="${name}" data-val="${esc(val)}">${esc(label)}</button>`;
+  }).join('')}</div>`;
+}
+
+// 'HH:MM' bed/wake times -> minutes asleep (wraps past midnight).
+function sleepMinutesFromTimes(bed, wake) {
+  if (!bed || !wake) return null;
+  const [bh, bm] = bed.split(':').map(Number);
+  const [wh, wm] = wake.split(':').map(Number);
+  if ([bh, bm, wh, wm].some((x) => !Number.isFinite(x))) return null;
+  let min = (wh * 60 + wm) - (bh * 60 + bm);
+  if (min <= 0) min += 24 * 60;
+  return min;
+}
+function fmtSleepMin(min) {
+  if (min == null) return '';
+  return `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, '0')}m`;
+}
+
+// waist stored in cm (like bodyweight in kg); shown in the profile's units
+const CM_PER_IN = 2.54;
+function waistUnit() { return get().settings.units === 'kg' ? 'cm' : 'in'; }
+function waistFromCm(cm) { return waistUnit() === 'cm' ? cm : cm / CM_PER_IN; }
+function waistToCm(v) { return waistUnit() === 'cm' ? v : v * CM_PER_IN; }
 
 function renderCheckinDraft() {
   const e = draft.entry;
@@ -844,20 +989,43 @@ function renderCheckinDraft() {
     <button type="button" class="segbtn ${part === 'evening' ? 'is-active' : ''}" data-part="evening">🌙 Evening</button>
   </div>`;
 
+  const sleepMin = sleepMinutesFromTimes(e.bedTime, e.wakeTime);
+  const waistVal = e.waist != null ? Math.round(waistFromCm(e.waist) * 10) / 10 : '';
+  const wu = waistUnit();
+
   const morning = h`
     <div class="card">
       <div class="card__title"><h2>Sleep</h2><span class="card__hint">last night</span></div>
+      <div class="field-row">
+        <label class="field"><span>In bed at</span><input type="time" id="jBed" value="${esc(e.bedTime || '')}" /></label>
+        <label class="field"><span>Woke at</span><input type="time" id="jWake" value="${esc(e.wakeTime || '')}" /></label>
+      </div>
+      ${sleepMin != null ? `<div class="small muted" style="margin:-4px 0 10px">≈ <b>${fmtSleepMin(sleepMin)}</b> in bed</div>` : ''}
       <label class="field"><span>Sleep difficulty${e.sleepDiff ? ` · ${SLEEP_LABELS[e.sleepDiff]}` : ''}</span></label>
       ${ratingHTML('sleepDiff', e.sleepDiff, ['1 · easy', '5 · very hard'])}
+    </div>
+    <div class="card">
+      <div class="card__title"><h2>Yesterday</h2><span class="card__hint">catch-up</span></div>
+      <label class="field" style="margin:0"><span>Drinks yesterday (alcohol)</span>
+        <input type="number" inputmode="numeric" id="jYDrinks" value="${draft.yDrinks ?? ''}" placeholder="0" /></label>
+      <div class="small muted mt">Saved to yesterday's record, so alcohol lines up with the night it affected.</div>
     </div>
     <div class="card">
       <div class="card__title"><h2>This morning</h2><span class="card__hint">optional</span></div>
       <label class="field"><span>Bodyweight (${u})</span>
         <input type="number" inputmode="decimal" id="jBw" value="${bwVal}" placeholder="morning weigh-in" /></label>
+      <div class="field-row">
+        <label class="field"><span>Resting HR (bpm)</span>
+          <input type="number" inputmode="numeric" id="jRhr" value="${e.rhr ?? ''}" placeholder="bpm" /></label>
+        <label class="field"><span>Waist (${wu})</span>
+          <input type="number" inputmode="decimal" id="jWaist" value="${waistVal}" placeholder="optional" /></label>
+      </div>
       <label class="field"><span>Energy waking up</span></label>
       ${ratingHTML('energy', e.energy, ['1 · flat', '5 · great'])}
       <label class="field mt"><span>Soreness</span></label>
       ${ratingHTML('soreness', e.soreness, ['1 · none', '5 · very sore'])}
+      <label class="field mt"><span>Pain or niggles</span></label>
+      ${chipsHTML('pain', PAIN_AREAS, e.pain)}
       <label class="field mt" style="margin-bottom:0"><span>Sleep notes</span>
         <input type="text" id="jAmNote" value="${esc(e.amNote || '')}" placeholder="woke at 3am, vivid dreams…" /></label>
     </div>`;
@@ -865,10 +1033,18 @@ function renderCheckinDraft() {
   const evening = h`
     <div class="card">
       <div class="card__title"><h2>The day</h2><span class="card__hint">this evening</span></div>
-      <label class="field"><span>Drinks (alcohol)</span>
-        <input type="number" inputmode="numeric" id="jDrinks" value="${e.drinks ?? ''}" placeholder="0" /></label>
+      <div class="field-row">
+        <label class="field"><span>Drinks (alcohol)</span>
+          <input type="number" inputmode="numeric" id="jDrinks" value="${e.drinks ?? ''}" placeholder="0" /></label>
+        <label class="field"><span>Caffeine (drinks)</span>
+          <input type="number" inputmode="numeric" id="jCaffeine" value="${e.caffeine ?? ''}" placeholder="0" /></label>
+      </div>
+      <label class="field"><span>Calories (rough, optional)</span>
+        <input type="number" inputmode="numeric" id="jKcal" value="${e.kcal ?? ''}" placeholder="kcal" /></label>
       <label class="field"><span>Stress today</span></label>
       ${ratingHTML('stress', e.stress, ['1 · calm', '5 · high'])}
+      <label class="field mt"><span>Day flags</span></label>
+      ${chipsHTML('flags', DAY_FLAGS, e.flags)}
       <label class="field mt"><span>Pre-sleep activity</span>
         <input type="text" id="jPre" value="${esc(e.preSleep || '')}" placeholder="screens, reading, stretching…" /></label>
     </div>
@@ -897,16 +1073,46 @@ function renderCheckinDraft() {
   bindText('jPre', 'preSleep');
   bindText('jNotes', 'notes');
   bindText('jAmNote', 'amNote');
+  const bindNum = (id, key) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', (ev) => { const v = ev.target.value; draft.entry[key] = v === '' ? null : Math.max(0, Number(v) || 0); });
+  };
+  bindNum('jDrinks', 'drinks');
+  bindNum('jCaffeine', 'caffeine');
+  bindNum('jKcal', 'kcal');
+  bindNum('jRhr', 'rhr');
   const bwEl = document.getElementById('jBw');
   if (bwEl) bwEl.addEventListener('input', (ev) => { const v = ev.target.value; draft.entry.bw = v === '' ? null : toKg(Number(v) || 0, u); });
-  const drEl = document.getElementById('jDrinks');
-  if (drEl) drEl.addEventListener('input', (ev) => { const v = ev.target.value; draft.entry.drinks = v === '' ? null : Math.max(0, Number(v) || 0); });
+  const waistEl = document.getElementById('jWaist');
+  if (waistEl) waistEl.addEventListener('input', (ev) => { const v = ev.target.value; draft.entry.waist = v === '' ? null : waistToCm(Number(v) || 0); });
+  const ydEl = document.getElementById('jYDrinks');
+  if (ydEl) ydEl.addEventListener('input', (ev) => { const v = ev.target.value; draft.yDrinks = v === '' ? null : Math.max(0, Number(v) || 0); });
+  // bed/wake times re-render so the "≈ 7h 30m" hint stays live
+  const bindTime = (id, key) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', (ev) => { draft.entry[key] = ev.target.value || null; renderCheckinDraft(); });
+  };
+  bindTime('jBed', 'bedTime');
+  bindTime('jWake', 'wakeTime');
 
-  document.getElementById('jDate').addEventListener('change', (ev) => { draft.date = ev.target.value; renderCheckinDraft(); });
+  document.getElementById('jDate').addEventListener('change', (ev) => {
+    draft.date = ev.target.value;
+    const yd = get().journal[addDaysISO(draft.date, -1)] || {};
+    draft.yDrinks = yd.drinks ?? null; draft.yDrinks0 = yd.drinks ?? null;
+    renderCheckinDraft();
+  });
   viewEl.querySelectorAll('[data-part]').forEach((b) => b.addEventListener('click', () => { draft.part = b.dataset.part; renderCheckinDraft(); }));
   viewEl.querySelectorAll('[data-rate]').forEach((b) => b.addEventListener('click', () => {
     const key = b.dataset.rate, val = Number(b.dataset.val);
     draft.entry[key] = draft.entry[key] === val ? null : val;
+    haptic(8); renderCheckinDraft();
+  }));
+  viewEl.querySelectorAll('[data-chip]').forEach((b) => b.addEventListener('click', () => {
+    const key = b.dataset.chip, val = b.dataset.val;
+    const arr = Array.isArray(draft.entry[key]) ? draft.entry[key].slice() : [];
+    const i = arr.indexOf(val);
+    if (i >= 0) arr.splice(i, 1); else arr.push(val);
+    draft.entry[key] = arr;
     haptic(8); renderCheckinDraft();
   }));
   document.getElementById('cancelDraft').addEventListener('click', () => { draft = null; setTab('week'); });
@@ -915,22 +1121,40 @@ function renderCheckinDraft() {
 
 // Merge-save: draft.entry started as a copy of the day's record and inputs
 // update it live, so persisting the whole thing preserves the other half.
+// Yesterday's drinks (from the morning catch-up) are written to yesterday's
+// record so alcohol stays attributed to the day it was consumed.
 function saveCheckin() {
   const e = draft.entry;
+  const now = new Date().toISOString();
   const entry = {
     bw: e.bw != null ? e.bw : null,
+    bedTime: e.bedTime || null,
+    wakeTime: e.wakeTime || null,
+    sleepMin: sleepMinutesFromTimes(e.bedTime, e.wakeTime),
     sleepDiff: e.sleepDiff || null,
+    rhr: e.rhr != null ? e.rhr : null,
+    waist: e.waist != null ? Math.round(e.waist * 10) / 10 : null,
     energy: e.energy || null, soreness: e.soreness || null, stress: e.stress || null,
+    pain: Array.isArray(e.pain) && e.pain.length ? e.pain : null,
     drinks: e.drinks != null ? e.drinks : null,
+    caffeine: e.caffeine != null ? e.caffeine : null,
+    kcal: e.kcal != null ? e.kcal : null,
+    flags: Array.isArray(e.flags) && e.flags.length ? e.flags : null,
     preSleep: (e.preSleep || '').trim(),
     amNote: (e.amNote || '').trim(),
     notes: (e.notes || '').trim(),
+    _u: now,
   };
-  if (!morningDone(entry) && !eveningDone(entry)) { toast('Nothing to save yet'); return; }
+  const yChanged = draft.yDrinks !== draft.yDrinks0;
+  if (!morningDone(entry) && !eveningDone(entry) && !yChanged) { toast('Nothing to save yet'); return; }
   const date = draft.date;
   const partLabel = draft.part === 'evening' ? 'Evening' : 'Morning';
   update((s) => {
-    s.journal[date] = entry;
+    if (morningDone(entry) || eveningDone(entry) || s.journal[date]) s.journal[date] = entry;
+    if (yChanged) {
+      const yDate = addDaysISO(date, -1);
+      s.journal[yDate] = { ...(s.journal[yDate] || {}), drinks: draft.yDrinks, _u: now };
+    }
     if (entry.bw != null) s.settings.bodyweightKg = Math.round(entry.bw * 10) / 10; // keep profile fresh
   });
   draft = null; toast(`${partLabel} check-in saved`); setTab('week');
@@ -996,7 +1220,7 @@ function renderProgress() {
   // best estimated 1RM across weighted lifts
   let best = null;
   strengthSessions.forEach((s) => (s.entries || []).forEach((en) => {
-    const ex = exerciseById(en.exerciseId) || en.exSnapshot;
+    const ex = entryExercise(en);
     if (!ex || ex.unit === 'bw' || ex.unit === 'sec') return;
     const m = exerciseMetric(ex, en.sets);
     if (m != null && (!best || m > best.v)) best = { v: m, name: ex.name, unit: ex.unit };
@@ -1026,7 +1250,7 @@ function renderProgress() {
   strengthSessions
     .slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
     .forEach((s) => (s.entries || []).forEach((en) => {
-      const ex = exerciseById(en.exerciseId) || en.exSnapshot;
+      const ex = entryExercise(en);
       if (!ex) return;
       const m = exerciseMetric(ex, en.sets);
       if (m == null) return;
@@ -1265,6 +1489,10 @@ function renderRecoveryDetail() {
   // honest sleep -> performance signal: bucket lifting days by that morning's
   // (previous night's) sleep, compare average session volume. Directional only.
   const insight = sleepPerformanceInsight();
+  const load = trainingLoadCard();
+  const alcohol = alcoholSleepInsight();
+  const sorenessCard = sorenessTrainingInsight();
+  const proteinCard = proteinBodyweightCard();
 
   // Fitbit seam: prompt to connect until measured data lands.
   const device = hasDeviceData() ? '' : h`<div class="card card--seam">
@@ -1275,9 +1503,116 @@ function renderRecoveryDetail() {
     <button class="btn btn--sm" id="fitbitSoon" disabled>Connect Fitbit (soon)</button>
   </div>`;
 
-  viewEl.innerHTML = detailBackBar('Progress') + sleepCard + drinkCard + readiness + insight + device;
+  viewEl.innerHTML = detailBackBar('Progress') + load + sleepCard + drinkCard + readiness
+    + insight + alcohol + sorenessCard + proteinCard + device;
   viewEl.querySelector('[data-back]').addEventListener('click', () => { recoveryDetail = false; render(); });
   mountTips(viewEl);
+}
+
+// ---- acute:chronic workload ratio (ACWR) ----
+// Tonnage in the last 7 days vs the 28-day weekly average. Ratios well above
+// ~1.3 flag a sharp load spike (a known overuse-risk signal); well below ~0.8
+// flags detraining. Uses lifting tonnage only (timed/bodyweight excluded) —
+// directional, not a medical score.
+function trainingLoadCard() {
+  const s = get();
+  const lifts = s.sessions.filter((x) => x.kind === 'strength');
+  if (!lifts.length) return '';
+  const today = todayISO();
+  const d7 = addDaysISO(today, -6), d28 = addDaysISO(today, -27);
+  const firstDate = lifts.reduce((a, x) => (x.date < a ? x.date : a), today);
+  if (firstDate > addDaysISO(today, -13)) {
+    return h`<div class="card">
+      <div class="card__title"><h2>Training load</h2><span class="card__hint">acute : chronic</span></div>
+      <p class="small muted">After ~2 weeks of logging, this compares your last 7 days of lifting volume with your 4-week norm to flag load spikes and detraining dips.</p>
+    </div>`;
+  }
+  const volIn = (from) => lifts.filter((x) => x.date >= from && x.date <= today).reduce((a, x) => a + sessionVolume(x), 0);
+  const acute = volIn(d7);
+  const chronicWeekly = volIn(d28) / 4;
+  if (chronicWeekly <= 0) return '';
+  const ratio = acute / chronicWeekly;
+  const zone = ratio > 1.5 ? ['⚠️ Sharp spike', 'var(--warn)', 'Big jump vs your norm — favor recovery this week.']
+    : ratio > 1.3 ? ['▲ Ramping fast', 'var(--warn)', 'Load is climbing quickly; keep an eye on sleep & soreness.']
+    : ratio >= 0.8 ? ['✓ Steady', 'var(--good)', 'Load is consistent with your 4-week norm.']
+    : ['▼ Light week', 'var(--accent-2)', 'Well below your norm — fine if planned (deload / travel).'];
+  return h`<div class="card">
+    <div class="card__title"><h2>Training load</h2><span class="card__hint">acute : chronic</span></div>
+    <div class="rd-row"><span>Last 7 days</span><b>${compact(acute)} lb</b></div>
+    <div class="rd-row"><span>4-week average</span><b>${compact(Math.round(chronicWeekly))} lb/wk</b></div>
+    <div class="rd-row"><span>Ratio</span><b style="color:${zone[1]}">${ratio.toFixed(2)} · ${zone[0]}</b></div>
+    <p class="small muted mt">${zone[2]} Directional only.</p>
+  </div>`;
+}
+
+// ---- alcohol -> next-morning sleep ----
+// Sleep difficulty logged the morning after drinking days vs. dry days.
+function alcoholSleepInsight() {
+  const j = get().journal;
+  const drank = [], dry = [];
+  Object.keys(j).forEach((d) => {
+    const drinks = j[d] ? j[d].drinks : null;
+    if (drinks == null) return;
+    const next = j[addDaysISO(d, 1)];
+    if (!next || !next.sleepDiff) return;
+    (drinks > 0 ? drank : dry).push(next.sleepDiff);
+  });
+  if (drank.length < 2 || dry.length < 2) {
+    return h`<div class="card">
+      <div class="card__title"><h2>Alcohol vs sleep</h2></div>
+      <p class="small muted">Keep logging drinks and morning sleep — this will compare sleep after drinking vs. dry days. So far: ${drank.length} drinking, ${dry.length} dry day${dry.length === 1 ? '' : 's'} with a next-morning rating.</p>
+    </div>`;
+  }
+  const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+  const ad = Math.round(avg(drank) * 10) / 10, an = Math.round(avg(dry) * 10) / 10;
+  const delta = Math.round((ad - an) * 10) / 10;
+  return h`<div class="card">
+    <div class="card__title"><h2>Alcohol vs sleep</h2><span class="card__hint">next-morning rating</span></div>
+    <div class="rd-row"><span>After drinking (${drank.length}×)</span><b>${ad}/5 difficulty</b></div>
+    <div class="rd-row"><span>After dry days (${dry.length}×)</span><b>${an}/5 difficulty</b></div>
+    <p class="small muted mt">Sleep rates <b>${delta >= 0 ? '+' : ''}${delta}</b> ${delta >= 0 ? 'harder' : 'easier'} after drinking, on average. Directional — more data sharpens it.</p>
+  </div>`;
+}
+
+// ---- soreness the morning after training vs. rest ----
+function sorenessTrainingInsight() {
+  const s = get();
+  const trained = [], rested = [];
+  Object.keys(s.journal).forEach((d) => {
+    const sore = s.journal[d] ? s.journal[d].soreness : null;
+    if (!sore) return;
+    const prev = addDaysISO(d, -1);
+    const lifted = s.sessions.some((x) => x.kind === 'strength' && x.date === prev);
+    (lifted ? trained : rested).push(sore);
+  });
+  if (trained.length < 2 || rested.length < 2) return '';
+  const avg = (a) => Math.round(a.reduce((x, y) => x + y, 0) / a.length * 10) / 10;
+  return h`<div class="card">
+    <div class="card__title"><h2>Soreness vs training</h2><span class="card__hint">next morning</span></div>
+    <div class="rd-row"><span>After lifting days (${trained.length}×)</span><b>${avg(trained)}/5</b></div>
+    <div class="rd-row"><span>After rest days (${rested.length}×)</span><b>${avg(rested)}/5</b></div>
+    <p class="small muted mt">A gap that keeps growing can mean recovery isn't keeping up with volume.</p>
+  </div>`;
+}
+
+// ---- protein adherence vs bodyweight, last 4 weeks ----
+function proteinBodyweightCard() {
+  const s = get();
+  const from = addDaysISO(todayISO(), -27);
+  const target = proteinTarget();
+  const pDays = Object.keys(s.proteinLog).filter((d) => d >= from && s.proteinLog[d] > 0).sort();
+  const bwDays = Object.keys(s.journal).filter((d) => d >= from && s.journal[d].bw != null).sort();
+  if (pDays.length < 5 || bwDays.length < 2) return '';
+  const avgP = Math.round(pDays.reduce((a, d) => a + s.proteinLog[d], 0) / pDays.length);
+  const adherence = target ? Math.round((avgP / target) * 100) : 0;
+  const u = bwUnit();
+  const chg = Math.round((fromKg(s.journal[bwDays[bwDays.length - 1]].bw, u) - fromKg(s.journal[bwDays[0]].bw, u)) * 10) / 10;
+  return h`<div class="card">
+    <div class="card__title"><h2>Protein &amp; bodyweight</h2><span class="card__hint">last 4 weeks</span></div>
+    <div class="rd-row"><span>Avg protein (${pDays.length} days)</span><b>${avgP} g · ${adherence}% of target</b></div>
+    <div class="rd-row"><span>Bodyweight change</span><b>${chg >= 0 ? '+' : ''}${chg} ${u}</b></div>
+    <p class="small muted mt">Read together with the volume trend: gaining with high protein &amp; rising volume skews muscle; losing with high protein protects it.</p>
+  </div>`;
 }
 
 // Compare average session volume on days after easy vs hard sleep. Returns a
@@ -1321,9 +1656,16 @@ function relDay(iso) {
 }
 function toISO(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 
+// Tonnage (weight × reps) for a strength session. Timed (sec) and bodyweight
+// entries are excluded — a 35s plank stored as weight=35 is not 35 lb, and
+// counting it would silently corrupt every volume chart and insight.
 function sessionVolume(s) {
   if (s.kind !== 'strength') return 0;
-  return (s.entries || []).reduce((v, e) => v + (e.sets || []).reduce((a, st) => a + (Number(st.weight) || 0) * (Number(st.reps) || 0), 0), 0);
+  return (s.entries || []).reduce((v, e) => {
+    const unit = entryExercise(e)?.unit;
+    if (unit === 'sec' || unit === 'bw') return v;
+    return v + (e.sets || []).reduce((a, st) => a + (Number(st.weight) || 0) * (Number(st.reps) || 0), 0);
+  }, 0);
 }
 
 function renderHistory() {
@@ -1369,10 +1711,12 @@ function renderHistory() {
 
 function journalHistoryItem(date, j) {
   const parts = [];
+  if (j.sleepMin != null) parts.push(fmtSleepMin(j.sleepMin));
   if (j.sleepDiff) parts.push(`sleep ${j.sleepDiff}/5`);
   if (j.drinks != null) parts.push(`${j.drinks} drink${j.drinks === 1 ? '' : 's'}`);
   if (j.bw != null) parts.push(fmtBw(j.bw));
   if (j.energy) parts.push(`energy ${j.energy}/5`);
+  if (j.rhr != null) parts.push(`RHR ${j.rhr}`);
   const detail = parts.join(' · ') + (j.notes ? (parts.length ? ' · ' : '') + '“' + esc(j.notes) + '”' : '');
   return h`<div class="hist-item" data-journal="${date}">
     <div class="hist-item__ico">📓</div>
@@ -1387,7 +1731,7 @@ function journalHistoryItem(date, j) {
 function historyItem(s) {
   let ico = '🏋️', title = 'Strength', detail = '', extra = '';
   if (s.kind === 'strength') {
-    const totalSets = (s.entries || []).reduce((n, e) => n + e.sets.length, 0);
+    const totalSets = (s.entries || []).reduce((n, e) => n + e.sets.filter((st) => Number(st.reps) > 0).length, 0);
     const names = (s.entries || []).map((e) => (exerciseById(e.exerciseId)?.name) || e.exSnapshot?.name || '?');
     title = s.templateName || 'Strength';
     detail = names.join(' · ');
@@ -1396,7 +1740,7 @@ function historyItem(s) {
   } else if (s.kind === 'cardio') {
     ico = s.cardioType === 'interval' ? '🔥' : '🚴';
     title = `${s.cardioType === 'interval' ? 'Intervals' : 'Zone 2'} · ${s.durationMin} min`;
-    detail = s.avgHR ? `avg ${s.avgHR} bpm` : '';
+    detail = [s.avgHR ? `avg ${s.avgHR} bpm` : '', s.distance ? `${s.distance} ${s.distanceUnit || ''}` : '', s.rpe ? `RPE ${s.rpe}` : ''].filter(Boolean).join(' · ');
   } else if (s.kind === 'activity') {
     const m = ACTIVITY_MAP[s.activity] || ACTIVITY_MAP.other;
     ico = m.icon; title = `${m.label} · ${s.durationMin} min`; detail = m.note;
@@ -1421,7 +1765,10 @@ function sessionDetail(id) {
     body = (s.entries || []).map((e) => {
       const live = exerciseById(e.exerciseId);
       const name = live?.name || e.exSnapshot?.name || '?';
-      const sets = (e.sets || []).map((st) => st.weight ? `${st.weight}×${st.reps}` : `${st.reps}${st.reps > 30 ? 's' : ''}`).join(', ');
+      const done = (e.sets || []).filter((st) => Number(st.reps) > 0);
+      const missed = (e.sets || []).length - done.length;
+      const sets = done.map((st) => st.weight ? `${st.weight}×${st.reps}` : `${st.reps}${st.reps > 30 ? 's' : ''}`).join(', ')
+        + (missed > 0 ? ` <span class="muted">(+${missed} missed)</span>` : '');
       const diff = e.difficulty ? ` <span class="tag">${diffLabel(e.difficulty)}</span>` : '';
       const chev = live ? '<span class="det-ex__chev">›</span>' : '';
       return h`<div class="det-ex${live ? ' det-ex--tap' : ''}"${live ? ` data-exdetail="${e.exerciseId}"` : ''}>
@@ -1430,20 +1777,51 @@ function sessionDetail(id) {
     const vol = sessionVolume(s);
     body += `<div class="small muted mt">Total volume: <b>${vol.toLocaleString()} lb</b> · tap a lift for its full history</div>`;
   } else {
-    body = `<div class="muted">${esc(s.kind === 'cardio' ? (s.cardioType === 'interval' ? 'Intervals' : 'Zone 2') : (ACTIVITY_MAP[s.activity] || ACTIVITY_MAP.other).label)} · ${s.durationMin} min${s.avgHR ? ` · avg ${s.avgHR} bpm` : ''}</div>`;
+    const extras = [s.avgHR ? `avg ${s.avgHR} bpm` : '', s.distance ? `${s.distance} ${s.distanceUnit || ''}` : '', s.rpe ? `RPE ${s.rpe}` : ''].filter(Boolean).join(' · ');
+    body = `<div class="muted">${esc(s.kind === 'cardio' ? (s.cardioType === 'interval' ? 'Intervals' : 'Zone 2') : (ACTIVITY_MAP[s.activity] || ACTIVITY_MAP.other).label)} · ${s.durationMin} min${extras ? ` · ${extras}` : ''}</div>`;
   }
   if (s.note) body += `<div class="small mt">“${esc(s.note)}”</div>`;
   openModal(`${relDay(s.date)} · ${fmtDate(s.date)}`, h`
     ${body}
-    <button class="btn btn--danger btn--sm mt" id="detDel">🗑 Delete this session</button>
+    <div class="btn-row mt">
+      <button class="btn btn--sm" id="detEdit">✎ Edit</button>
+      <button class="btn btn--danger btn--sm" id="detDel">🗑 Delete</button>
+    </div>
   `);
+  document.getElementById('detEdit').addEventListener('click', () => { closeModal(); editSession(s); });
   document.getElementById('detDel').addEventListener('click', () => {
-    update((st) => { st.sessions = st.sessions.filter((x) => x.id !== id); });
+    update((st) => {
+      st.sessions = st.sessions.filter((x) => x.id !== id);
+      st.deleted[id] = new Date().toISOString(); // tombstone so sync propagates the deletion
+    });
     closeModal(); toast('Deleted'); renderHistory();
   });
   modalRoot.querySelectorAll('[data-exdetail]').forEach((el) => el.addEventListener('click', () => {
     closeModal(); openExerciseDetail(el.dataset.exdetail);
   }));
+}
+
+// Load a saved session back into the matching draft editor so mistakes can be
+// corrected — bad data you can't fix would poison every later analysis.
+function editSession(s) {
+  if (s.kind === 'strength') {
+    draft = {
+      kind: 'strength', editId: s.id, date: s.date, note: s.note || '',
+      entries: (s.entries || []).map((en) => ({
+        exerciseId: en.exerciseId,
+        exSnapshot: en.exSnapshot || null,
+        sets: (en.sets || []).filter((st) => Number(st.reps) > 0)
+          .map((st) => ({ weight: st.weight ?? '', reps: st.reps ?? '', rir: st.rir ?? '' })),
+      })).filter((en) => exerciseById(en.exerciseId)),
+    };
+    draft.entries.forEach((en) => { if (!en.sets.length) en.sets.push(blankSet(exerciseById(en.exerciseId))); });
+  } else if (s.kind === 'cardio') {
+    draft = { kind: 'cardio', editId: s.id, cardioType: s.cardioType, date: s.date, durationMin: s.durationMin, avgHR: s.avgHR ?? '', distance: s.distance ?? '', rpe: s.rpe ?? '', note: s.note || '' };
+  } else if (s.kind === 'activity') {
+    draft = { kind: 'activity', editId: s.id, activity: s.activity, date: s.date, durationMin: s.durationMin, note: s.note || '' };
+  } else return;
+  workout = null;
+  setTab('log');
 }
 
 // ================= SETUP =================
@@ -1563,8 +1941,11 @@ function renderSetup() {
         <button class="btn btn--sm" id="csvTrain">⬇ Training CSV</button>
         <button class="btn btn--sm" id="csvJournal">⬇ Journal CSV</button>
       </div>
+      <div class="btn-row mb">
+        <button class="btn btn--sm" id="csvDaily">⬇ Daily summary CSV</button>
+      </div>
       <button class="btn btn--sm btn--danger" id="resetBtn">Reset all data</button>
-      <p class="small muted mt">Data lives on this device (offline). JSON is a full backup to restore or move devices; the CSVs (one row per set / per check-in) drop into a spreadsheet for analysis.</p>
+      <p class="small muted mt">Data lives on this device (offline). JSON is a full backup to restore or move devices. Training CSV = one row per set (with units, session ids &amp; planned-vs-done); Journal CSV = one row per check-in; Daily CSV = one row per day joining recovery, training load &amp; protein — ready for correlation analysis.</p>
     </div>
     <p class="center small muted">Concurrent Trainer · built from your evidence-based plan</p>
   `;
@@ -1594,6 +1975,7 @@ function renderSetup() {
   document.getElementById('impBtn').addEventListener('click', doImport);
   document.getElementById('csvTrain').addEventListener('click', exportTrainingCSV);
   document.getElementById('csvJournal').addEventListener('click', exportJournalCSV);
+  document.getElementById('csvDaily').addEventListener('click', exportDailyCSV);
   document.getElementById('resetBtn').addEventListener('click', () => {
     openModal('Reset all data?', `<p class="muted">This deletes every logged session and restores default exercises. Export a backup first if unsure.</p>
       <div class="btn-row mt"><button class="btn btn--ghost" data-close-btn>Cancel</button><button class="btn btn--danger" id="confReset">Reset</button></div>`);
@@ -1680,24 +2062,41 @@ function toCSV(headers, rows) {
   return [headers, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n');
 }
 
+// weight expressed in kg for cross-exercise analysis; '' when not a load
+function weightKg(w, unit) {
+  if (w == null || w === '' || (unit !== 'lb' && unit !== 'kg')) return '';
+  return Math.round((unit === 'kg' ? Number(w) : Number(w) * KG_PER_LB) * 100) / 100;
+}
+
 // One row per logged set (strength) / per session (cardio & activity).
+// session_id groups sets back into sessions; unit + weight_kg make loads
+// unambiguous; target_reps + completed capture planned-vs-done compliance.
 function exportTrainingCSV() {
-  const headers = ['date', 'type', 'exercise', 'pattern', 'set', 'weight', 'reps', 'rir', 'difficulty', 'duration_min', 'avg_hr', 'note'];
+  const headers = ['date', 'session_id', 'type', 'template', 'started_at', 'exercise', 'pattern', 'unit',
+    'set', 'target_reps', 'weight', 'weight_kg', 'reps', 'completed', 'rir', 'difficulty',
+    'duration_min', 'avg_hr', 'rpe', 'distance', 'distance_unit', 'note'];
   const rows = [];
   [...get().sessions].sort((a, b) => (a.date < b.date ? -1 : 1)).forEach((s) => {
     if (s.kind === 'strength') {
       (s.entries || []).forEach((en) => {
-        const ex = exerciseById(en.exerciseId) || en.exSnapshot || {};
+        const ex = entryExercise(en) || {};
         (en.sets || []).forEach((st, i) => {
-          rows.push([s.date, 'strength', ex.name || '?', ex.pattern || '', i + 1,
-            st.weight ?? '', st.reps ?? '', st.rir ?? '', en.difficulty || '', '', '', s.note || '']);
+          const done = st.completed != null ? st.completed : Number(st.reps) > 0;
+          rows.push([s.date, s.id, 'strength', s.templateName || '', s.startedAt || s.loggedAt || '',
+            ex.name || '?', ex.pattern || '', ex.unit || '',
+            i + 1, en.target ? en.target.reps : '', st.weight ?? '', weightKg(st.weight, ex.unit),
+            st.reps ?? '', done ? 1 : 0, st.rir ?? '', en.difficulty || '', '', '', '', '', '', s.note || '']);
         });
       });
     } else if (s.kind === 'cardio') {
-      rows.push([s.date, s.cardioType === 'interval' ? 'interval' : 'zone2', '', '', '', '', '', '', '', s.durationMin ?? '', s.avgHR ?? '', s.note || '']);
+      rows.push([s.date, s.id, s.cardioType === 'interval' ? 'interval' : 'zone2', '', s.loggedAt || '',
+        '', '', '', '', '', '', '', '', '', '', '',
+        s.durationMin ?? '', s.avgHR ?? '', s.rpe ?? '', s.distance ?? '', s.distanceUnit || '', s.note || '']);
     } else if (s.kind === 'activity') {
       const m = ACTIVITY_MAP[s.activity] || ACTIVITY_MAP.other;
-      rows.push([s.date, 'activity:' + s.activity, m.label, '', '', '', '', '', '', s.durationMin ?? '', '', s.note || '']);
+      rows.push([s.date, s.id, 'activity:' + s.activity, '', s.loggedAt || '',
+        m.label, '', '', '', '', '', '', '', '', '', '',
+        s.durationMin ?? '', '', '', '', '', s.note || '']);
     }
   });
   if (!rows.length) { toast('No sessions to export'); return; }
@@ -1705,23 +2104,77 @@ function exportTrainingCSV() {
   toast('Training CSV downloaded');
 }
 
-// One row per daily check-in. Bodyweight in both kg and the user's display unit.
+// One row per day with any recovery signal (journal or device), via the
+// normalized recovery layer — so measured Fitbit fields land in the same
+// columns whenever they exist.
 function exportJournalCSV() {
   const j = get().journal;
   const u = bwUnit();
-  const headers = ['date', 'bodyweight_kg', `bodyweight_${u}`, 'sleep_difficulty', 'drinks', 'energy', 'soreness', 'stress', 'pre_sleep_activity', 'sleep_notes', 'notes'];
-  const rows = Object.keys(j).sort().map((d) => {
-    const e = j[d];
+  const headers = ['date', 'bodyweight_kg', `bodyweight_${u}`, 'bed_time', 'wake_time', 'sleep_min',
+    'sleep_difficulty', 'sleep_score', 'sleep_source', 'resting_hr', 'resting_hr_source', 'hrv',
+    'waist_cm', 'drinks', 'caffeine', 'kcal', 'energy', 'soreness', 'stress', 'pain', 'flags',
+    'pre_sleep_activity', 'sleep_notes', 'notes'];
+  const rows = recoveryDates().map((d) => {
+    const e = j[d] || {};
+    const r = dailyRecovery(d);
     return [d, e.bw != null ? Math.round(e.bw * 10) / 10 : '', e.bw != null ? Math.round(fromKg(e.bw, u) * 10) / 10 : '',
-      e.sleepDiff ?? '', e.drinks ?? '', e.energy ?? '', e.soreness ?? '', e.stress ?? '', e.preSleep || '', e.amNote || '', e.notes || ''];
+      e.bedTime || '', e.wakeTime || '', r.sleepMinutes ?? '',
+      e.sleepDiff ?? '', r.sleepScore ?? '', r.sleepSource || '', r.restingHR ?? '', r.restingHRSource || '', r.hrv ?? '',
+      e.waist ?? '', e.drinks ?? '', e.caffeine ?? '', e.kcal ?? '', e.energy ?? '', e.soreness ?? '', e.stress ?? '',
+      (e.pain || []).join('; '), (e.flags || []).join('; '),
+      e.preSleep || '', e.amNote || '', e.notes || ''];
   });
   if (!rows.length) { toast('No check-ins to export'); return; }
   downloadFile(toCSV(headers, rows), `concurrent-trainer-journal-${todayISO()}.csv`, 'text/csv');
   toast('Journal CSV downloaded');
 }
 
+// One row per day joining recovery + training load + protein — the day-grain
+// merge is where the health correlations live, so ship it pre-joined.
+function exportDailyCSV() {
+  const s = get();
+  const dates = new Set([...recoveryDates(), ...s.sessions.map((x) => x.date), ...Object.keys(s.proteinLog)]);
+  if (!dates.size) { toast('Nothing to export yet'); return; }
+  const headers = ['date', 'bodyweight_kg', 'sleep_min', 'sleep_difficulty', 'resting_hr', 'energy', 'soreness', 'stress',
+    'pain', 'drinks', 'caffeine', 'kcal', 'flags', 'protein_g', 'protein_target_g',
+    'strength_sessions', 'completed_sets', 'hard_sets', 'volume_lb', 'zone2_min', 'interval_min', 'other_activity_min', 'notes'];
+  const target = proteinTarget();
+  const rows = [...dates].sort().map((d) => {
+    const e = s.journal[d] || {};
+    const r = dailyRecovery(d);
+    const day = s.sessions.filter((x) => x.date === d);
+    let liftN = 0, sets = 0, hard = 0, vol = 0, z2 = 0, intv = 0, other = 0;
+    day.forEach((sess) => {
+      if (sess.kind === 'strength') {
+        liftN += 1;
+        vol += sessionVolume(sess);
+        (sess.entries || []).forEach((en) => (en.sets || []).forEach((st) => {
+          if (Number(st.reps) > 0) sets += 1;
+          if (isHardSet(st)) hard += 1;
+        }));
+      } else if (sess.kind === 'cardio') {
+        if (sess.cardioType === 'interval') intv += Number(sess.durationMin) || 0;
+        else if (sess.cardioType === 'zone2') z2 += Number(sess.durationMin) || 0;
+        else other += Number(sess.durationMin) || 0;
+      } else if (sess.kind === 'activity') {
+        const m = ACTIVITY_MAP[sess.activity] || ACTIVITY_MAP.other;
+        const dur = Number(sess.durationMin) || 0;
+        if (m.cardioType === 'zone2') z2 += dur; else if (m.cardioType === 'interval') intv += dur; else other += dur;
+      }
+    });
+    return [d, e.bw != null ? Math.round(e.bw * 10) / 10 : '', r.sleepMinutes ?? '', e.sleepDiff ?? '', r.restingHR ?? '',
+      e.energy ?? '', e.soreness ?? '', e.stress ?? '', (e.pain || []).join('; '),
+      e.drinks ?? '', e.caffeine ?? '', e.kcal ?? '', (e.flags || []).join('; '),
+      s.proteinLog[d] ?? '', target,
+      liftN, sets, hard, vol, z2, intv, other, e.notes || ''];
+  });
+  downloadFile(toCSV(headers, rows), `concurrent-trainer-daily-${todayISO()}.csv`, 'text/csv');
+  toast('Daily CSV downloaded');
+}
+
 function doExport() {
   downloadFile(exportJSON(), `concurrent-trainer-backup-${todayISO()}.json`, 'application/json');
+  localStorage.setItem(BACKUP_KEY, String(Date.now()));
   toast('Backup downloaded');
 }
 function doImport() {

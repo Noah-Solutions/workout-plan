@@ -26,26 +26,44 @@ week against the targets and **auto-adjusts your next session** based on how the
   week's volume, best e1RM, and week streak. Charts are hand-rolled SVG — no libraries, fully
   offline, and theme-aware.
 - **Daily check-ins (recovery journal)** — split into two moments that share one daily record:
-  a **🌅 morning** check-in for last night's **sleep difficulty** (1 easy – 5 hard), the **morning
-  weigh-in**, waking **energy** and **soreness**; and a **🌙 evening** check-in for **alcohol
-  drinks**, **stress**, **pre-sleep activity** and notes on the day. Each is one tap from the home
-  screen (independent ✓ status) or the Log menu, with a Morning/Evening toggle to flip between them,
-  editable from History, and surfaced as trends on Progress — so you can correlate recovery with how
-  your training actually goes.
+  a **🌅 morning** check-in for last night's sleep (**bed & wake times** with auto-computed
+  duration, **sleep difficulty** 1 easy – 5 hard), the **morning weigh-in**, **resting heart
+  rate**, an optional **waist** measurement, waking **energy**, **soreness**, **pain/niggle
+  areas** (per-joint chips) — plus a **"drinks yesterday"** catch-up field that writes alcohol to
+  the day it was actually consumed, since most people log it the next morning; and a **🌙 evening**
+  check-in for **alcohol**, **caffeine**, rough **calories**, **stress**, **day flags**
+  (sick / travel / rest), **pre-sleep activity** and notes. Each is one tap from the home screen
+  (independent ✓ status) or the Log menu, editable from History, and surfaced as trends on
+  Progress — so you can correlate recovery with how your training actually goes.
 - **Exercise detail** — tap any lift (from Progress or a History session) to drill into its own
   page: estimated-1RM trend, working-weight trend, per-session volume, best-ever tiles, the next
   auto-progression target, and a full session-by-session log.
 - **Recovery view (Fitbit-ready)** — a drill-down that blends your check-in data into sleep, alcohol
-  and readiness trends and a directional **sleep-vs-training** comparison (volume after easy vs. hard
-  sleep). Recovery reads through a source-agnostic layer (`js/recovery.js`): today it uses your
-  self-reports; when a **Fitbit** is connected later it will prefer measured sleep stages, resting
-  heart rate and HRV — no view changes needed.
-- **Data export** — a full **JSON** backup, plus **CSV** exports (one row per set/session, one row
-  per check-in) that drop straight into a spreadsheet to slice and refine your program.
+  and readiness trends plus a set of conservative, directional insights: **training load
+  (acute:chronic workload ratio)** to flag load spikes and detraining dips, **sleep vs training**
+  (volume after easy vs. hard sleep), **alcohol vs next-morning sleep**, **soreness after lifting
+  vs. rest days**, and **protein adherence vs. bodyweight** over the last 4 weeks. Recovery reads
+  through a source-agnostic layer (`js/recovery.js`): today it uses your self-reports (including
+  bed/wake-derived sleep minutes and manual resting HR); when a **Fitbit** is connected later it
+  will prefer measured sleep stages, resting heart rate and HRV — no view changes needed.
+- **Data export** — a full **JSON** backup, plus three **CSV** exports built for analysis:
+  **Training** (one row per set, with session ids, exercise units, `weight_kg`, planned reps and a
+  completed flag), **Journal** (one row per day of recovery data, including derived sleep minutes,
+  sleep score and device columns that fill in when a tracker is connected), and a **Daily summary**
+  (one row per day joining recovery, training load, cardio minutes and protein — the day-grain
+  merge where health correlations live). A gentle home-screen nudge reminds you to back up when
+  it's been a month (quiet when cloud sync is on).
 - **Guided workout (StrongLifts-style)** — a "Start workout" flow that shows your exact **target
   weight** for every lift, a **plate breakdown** per side, and tap-to-complete **set circles** (tap
   again if you missed reps). A built-in **rest timer** auto-starts after each set with a beep/vibrate
-  when it's up. You rate each lift's **difficulty** (Easy / Good / Hard / Failed).
+  when it's up. You rate each lift's **difficulty** (Easy / Good / Hard / Failed) — the rating is
+  also stored as an approximate per-set **RIR** so guided sessions keep an effort signal. Sessions
+  record **start/finish timestamps** and every **planned set** (missed sets are kept as 0-rep rows),
+  so compliance and time-of-day effects are analyzable later.
+- **Editable history** — any saved session can be **edited** (fix a typo'd weight, wrong duration)
+  or deleted from History. Historical entries keep a snapshot of the exercise (name, muscles,
+  pattern, unit) taken at save time, so renaming or re-tagging an exercise never rewrites past
+  weeks' stats. Corrections don't touch your current progression targets.
 - **Auto-progression & deload** — on success the next target goes up automatically (+5 lb upper,
   +10 lb lower; **double** if you tagged it Easy). Miss the reps and it holds; miss the same lift
   **3 sessions in a row and it deloads 10%**. Weights are in **lbs**, rounded to loadable plates.
@@ -60,8 +78,10 @@ week against the targets and **auto-adjusts your next session** based on how the
 - **Starter templates** — Full Body A/B and Upper/Lower from the plan.
 - **Tunable targets & profile** — bodyweight, units, protein g/kg, max HR, and every weekly target.
 - **Cloud sync (optional)** — back up/sync everything through your own tiny free server. Local-first
-  (the app keeps working offline), auto-syncs on change, last-write-wins across devices. Auth is a
-  single secret token — no accounts, no OAuth. See **[Cloud sync setup](#cloud-sync-self-hosted)** below.
+  (the app keeps working offline), auto-syncs on change, and merges **record-by-record** across
+  devices (sessions & exercises by id, check-ins by day) so a morning check-in on your phone and a
+  workout on a tablet both survive. Auth is a single secret token — no accounts, no OAuth. See
+  **[Cloud sync setup](#cloud-sync-self-hosted)** below.
 - **Export / import** JSON backups; reset to defaults.
 - **Offline PWA** — installable, cached service worker, no network needed after first load.
 
@@ -123,12 +143,15 @@ The app pulls on connect and auto-pushes (debounced) on every change. Use **Sync
 
 ### How sync behaves
 
-- **Local-first:** your device is the working copy; everything works offline. Changes auto-push
-  (debounced) when connected, and the app pulls on connect.
-- **Last-write-wins:** whichever side has the newer timestamp wins the whole dataset. A brand-new
-  install counts as "oldest," so connecting a second device **pulls** your data rather than
-  overwriting it. Editing two devices at the exact same moment can still overwrite one side — fine
-  for one-phone use, and the JSON export is always there as a manual backup.
+- **Local-first:** your device is the working copy; everything works offline. Changes auto-sync
+  (debounced pull-merge-push) when connected, and the app syncs on connect.
+- **Record-level merge:** every sync pulls the server copy and merges it field-by-field — sessions
+  and exercises by id, check-ins / protein / device data by date — with the newer record winning
+  each conflict. Session deletions carry a tombstone so they propagate instead of resurrecting.
+  A brand-new install adopts the server copy wholesale, so connecting a second device **pulls**
+  your data rather than overwriting it (and avoids duplicating the seed exercise library). The
+  worst-case conflict (the *same* record edited on two devices between syncs) resolves to the
+  newer edit; the JSON export is always there as a manual backup.
 - **Token = password:** anyone with the URL and token can read/write your data. Keep it secret;
   rotate anytime with `wrangler secret put SYNC_TOKEN` and re-enter it in the app.
 - Server URL, token, and connection state are stored only on your device, never sent to the server
@@ -138,6 +161,11 @@ The app pulls on connect and auto-pushes (debounced) on every change. Use **Sync
 
 - **Hard set** = a logged set with reps > 0 and RIR ≤ 3; each set credits every muscle the exercise targets.
 - **Pattern coverage** = number of sessions in the week that included ≥1 hard set of that pattern.
+- **Volume (tonnage)** = weight × reps summed over weighted sets only — timed (seconds) and
+  bodyweight exercises are excluded so a plank never masquerades as pounds lifted.
+- **Alcohol** is attributed to the day it was consumed (log it that evening, or via the morning
+  check-in's "drinks yesterday" field), so drinks line up with the night's sleep they affected.
+- **Guided-workout RIR** is derived from your difficulty rating (Easy→3, Good→2, Hard→1, Failed→0).
 - **Week** = Monday–Sunday.
 - All targets are editable under **Setup** — the defaults come straight from the plan.
 

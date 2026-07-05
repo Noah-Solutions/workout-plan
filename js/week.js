@@ -37,10 +37,18 @@ export function fmtDate(iso) {
 }
 
 // A "hard set" counts toward volume when RIR <= 3 (per the plan).
-function isHardSet(set) {
+export function isHardSet(set) {
   const rir = set.rir === '' || set.rir == null ? 0 : Number(set.rir);
   const reps = Number(set.reps) || 0;
   return reps > 0 && rir <= 3;
+}
+
+// Resolve the exercise an entry was logged against, preferring the snapshot
+// taken at save time so later edits to the library (rename, muscles, unit)
+// never rewrite historical aggregates. Falls back to the live exercise for
+// pre-snapshot data.
+export function entryExercise(entry) {
+  return entry.exSnapshot || exerciseById(entry.exerciseId);
 }
 
 // Activities map to training contributions per the plan's substitution guide.
@@ -74,7 +82,7 @@ export function aggregateWeek(refDate) {
       liftSessions += 1;
       const sessionPatterns = new Set();
       (sess.entries || []).forEach((entry) => {
-        const ex = exerciseById(entry.exerciseId) || entry.exSnapshot;
+        const ex = entryExercise(entry);
         if (!ex) return;
         const hard = (entry.sets || []).filter(isHardSet).length;
         (ex.muscles || []).forEach((m) => {

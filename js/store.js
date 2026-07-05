@@ -73,9 +73,16 @@ function defaults() {
     sessions: [],           // logged workouts
     proteinLog: {},         // 'YYYY-MM-DD' -> grams
     // daily recovery check-in. 'YYYY-MM-DD' -> {
-    //   bw (bodyweight, kg), sleepDiff (1-5, 1=easy 5=hard), drinks (alcohol count),
-    //   energy/soreness/stress (1-5, optional), preSleep (text), notes (text) }
+    //   bw (bodyweight, kg), bedTime/wakeTime ('HH:MM'), sleepMin (derived),
+    //   sleepDiff (1-5, 1=easy 5=hard), rhr (resting HR, bpm), waist (cm),
+    //   drinks (alcohol count, attributed to the day consumed), caffeine (drinks),
+    //   kcal (rough calories), energy/soreness/stress (1-5), pain (array of body
+    //   areas), flags (array: sick/travel/rest), preSleep/amNote/notes (text),
+    //   _u (per-record updatedAt for merge sync) }
     journal: {},
+    // tombstones for deleted sessions: id -> ISO time of deletion. Lets a
+    // deletion win over the same session arriving from another device.
+    deleted: {},
     // device-measured recovery (future Fitbit sync). 'YYYY-MM-DD' -> {
     //   sleepMinutes, sleepScore (0-100), restingHR, hrv, ... }. Empty until a
     //   sync layer populates it; recovery.js already prefers it over self-reports.
@@ -101,6 +108,7 @@ export function load() {
       state.proteinLog = state.proteinLog || {};
       state.journal = state.journal || {};
       state.fitbit = state.fitbit || {};
+      state.deleted = state.deleted || {};
       state.exercises = state.exercises || d.exercises;
       state.sessions = state.sessions || [];
       // backfill new per-exercise guided-workout fields
@@ -132,11 +140,17 @@ const listeners = [];
 export function onChange(cb) { listeners.push(cb); return () => { const i = listeners.indexOf(cb); if (i >= 0) listeners.splice(i, 1); }; }
 function notify() { listeners.forEach((f) => { try { f(); } catch (e) { console.error(e); } }); }
 
+// save-failure listeners — persisting to localStorage can fail (quota); the UI
+// must tell the user instead of silently dropping their logs.
+const saveErrListeners = [];
+export function onSaveError(cb) { saveErrListeners.push(cb); }
+
 export function save(silent) {
   try {
     localStorage.setItem(KEY, JSON.stringify(state));
   } catch (err) {
     console.error('Save failed', err);
+    saveErrListeners.forEach((f) => { try { f(err); } catch (e) {} });
   }
   if (!silent) notify();
 }
@@ -153,15 +167,16 @@ export function update(fn) {
   return s;
 }
 
-// Adopt remote state pulled from the cloud. Does NOT bump rev and does NOT
-// notify listeners, so pulling never triggers a push-back loop.
-export function applyRemote(remote) {
+// Adopt remote state wholesale (fresh installs only). Does NOT notify
+// listeners, so pulling never triggers a push-back loop.
+function adoptRemote(remote) {
   const s = get();
   if (Array.isArray(remote.sessions)) s.sessions = remote.sessions;
   if (Array.isArray(remote.exercises)) s.exercises = remote.exercises;
   if (remote.proteinLog && typeof remote.proteinLog === 'object') s.proteinLog = remote.proteinLog;
   if (remote.journal && typeof remote.journal === 'object') s.journal = remote.journal;
   if (remote.fitbit && typeof remote.fitbit === 'object') s.fitbit = remote.fitbit;
+  if (remote.deleted && typeof remote.deleted === 'object') s.deleted = remote.deleted;
   if (remote.settings && typeof remote.settings === 'object') {
     const d = defaults();
     s.settings = Object.assign({}, d.settings, remote.settings);
@@ -170,6 +185,101 @@ export function applyRemote(remote) {
   if (remote.updatedAt) s.updatedAt = remote.updatedAt;
   if (remote.rev != null) s.rev = remote.rev;
   save(true);
+}
+
+function ts(v) { return v ? (Date.parse(v) || 0) : 0; }
+function sameJSON(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+
+// Field-level merge of a pulled remote state into local state, so two devices
+// logging on the same day no longer clobber each other (the old model was
+// whole-state last-write-wins). Sessions & exercises merge by id, journal /
+// proteinLog / fitbit by date; the newer per-record stamp wins (sessions use
+// `updatedAt`, exercises & journal entries `_u`), falling back to whichever
+// side's overall updatedAt is newer. Session deletions propagate via the
+// `deleted` tombstone map. Saves silently (no auto-push loop) and returns
+// { changedLocal, pushNeeded } so the sync layer can push the merged result.
+export function mergeRemote(remote) {
+  const s = get();
+  if (!remote || typeof remote !== 'object' || !remote.updatedAt) {
+    return { changedLocal: false, pushNeeded: !!s.updatedAt }; // empty server -> just push
+  }
+  // A never-modified fresh install adopts the server wholesale — merging would
+  // duplicate the seed exercise library under freshly generated ids.
+  if (!s.updatedAt) { adoptRemote(remote); return { changedLocal: true, pushNeeded: false }; }
+
+  const remoteNewer = ts(remote.updatedAt) > ts(s.updatedAt);
+  let changedLocal = false; // merged result differs from what we had
+  let pushNeeded = false;   // merged result differs from the server copy
+
+  // tombstones: union
+  const del = Object.assign({}, remote.deleted || {}, s.deleted || {});
+  if (!sameJSON(del, s.deleted || {})) changedLocal = true;
+  if (!sameJSON(del, remote.deleted || {})) pushNeeded = true;
+  s.deleted = del;
+
+  // merge two arrays of {id,...} records; newer per-record `stamp` wins
+  const mergeById = (localArr, remoteArr, stamp) => {
+    const out = new Map();
+    (remoteArr || []).forEach((r) => { if (r && r.id) { out.set(r.id, r); } });
+    const localIds = new Set();
+    (localArr || []).forEach((l) => {
+      if (!l || !l.id) return;
+      localIds.add(l.id);
+      const r = out.get(l.id);
+      if (!r) { out.set(l.id, l); pushNeeded = true; return; }
+      if (sameJSON(l, r)) return;
+      const lt = ts(l[stamp]), rt = ts(r[stamp]);
+      const useLocal = lt === rt ? !remoteNewer : lt > rt;
+      if (useLocal) { out.set(l.id, l); pushNeeded = true; } else { changedLocal = true; }
+    });
+    (remoteArr || []).forEach((r) => { if (r && r.id && !localIds.has(r.id)) changedLocal = true; });
+    return [...out.values()];
+  };
+
+  s.sessions = mergeById(s.sessions, remote.sessions, 'updatedAt')
+    .filter((x) => !del[x.id])
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1
+      : (a.startedAt || a.loggedAt || '') < (b.startedAt || b.loggedAt || '') ? -1 : 1));
+  s.exercises = mergeById(s.exercises, remote.exercises, '_u');
+
+  // merge date-keyed maps; `stampKey` null -> conflicts fall back to overall-newer side
+  const mergeByDate = (localMap, remoteMap, stampKey, preferRemoteOnConflict) => {
+    const l = localMap || {}, r = remoteMap || {};
+    const out = {};
+    new Set([...Object.keys(l), ...Object.keys(r)]).forEach((d) => {
+      if (l[d] == null) { out[d] = r[d]; changedLocal = true; return; }
+      if (r[d] == null) { out[d] = l[d]; pushNeeded = true; return; }
+      if (sameJSON(l[d], r[d])) { out[d] = l[d]; return; }
+      let useLocal;
+      if (preferRemoteOnConflict) useLocal = false;
+      else if (stampKey) {
+        const lt = ts(l[d][stampKey]), rt = ts(r[d][stampKey]);
+        useLocal = lt === rt ? !remoteNewer : lt > rt;
+      } else useLocal = !remoteNewer;
+      out[d] = useLocal ? l[d] : r[d];
+      if (useLocal) pushNeeded = true; else changedLocal = true;
+    });
+    return out;
+  };
+
+  s.journal = mergeByDate(s.journal, remote.journal, '_u', false);
+  s.proteinLog = mergeByDate(s.proteinLog, remote.proteinLog, null, false);
+  s.fitbit = mergeByDate(s.fitbit, remote.fitbit, null, true); // device data: server wins
+
+  // settings are one blob: overall-newer side wins
+  if (remote.settings && typeof remote.settings === 'object' && !sameJSON(remote.settings, s.settings)) {
+    if (remoteNewer) {
+      const d = defaults();
+      s.settings = Object.assign({}, d.settings, remote.settings);
+      s.settings.targets = Object.assign({}, d.settings.targets, remote.settings.targets || {});
+      changedLocal = true;
+    } else pushNeeded = true;
+  }
+
+  s.rev = Math.max(s.rev || 0, remote.rev || 0) + (pushNeeded ? 1 : 0);
+  s.updatedAt = pushNeeded ? nowISO() : (remoteNewer ? remote.updatedAt : s.updatedAt);
+  save(true);
+  return { changedLocal, pushNeeded };
 }
 
 // Sync server config + connection flag live OUTSIDE synced state (never pushed to the server).
@@ -199,6 +309,7 @@ export function importJSON(text) {
   state.proteinLog = state.proteinLog || {};
   state.journal = state.journal || {};
   state.fitbit = state.fitbit || {};
+  state.deleted = state.deleted || {};
   save();
   return state;
 }
