@@ -32,7 +32,7 @@ sync.onStatus((status, detail) => {
   else if (status === 'error') { lastSyncMsg = 'Sync error: ' + detail; }
   else if (status === 'disconnected') { lastSyncMsg = ''; }
   if (currentTab === 'setup') renderSetup();
-  if (currentTab === 'week' && status === 'synced' && detail.direction !== 'up-to-date') renderWeek();
+  if ((currentTab === 'today' || currentTab === 'plan') && status === 'synced' && detail.direction !== 'up-to-date') render();
 });
 
 const viewEl = document.getElementById('view');
@@ -40,17 +40,19 @@ const titleEl = document.getElementById('viewTitle');
 const weekLabelEl = document.getElementById('weekLabel');
 const modalRoot = document.getElementById('modalRoot');
 
-let currentTab = 'week';
+let currentTab = 'today';
 // draft state for the log-session builder
 let draft = null;
 // in-progress guided (StrongLifts-style) workout
 let workout = null;
 // remembered exercise selection on the Progress tab
 let progressSel = null;
-// Progress sub-views (drill-downs). When set, the Progress tab renders a detail
-// screen instead of the charts overview.
-let exDetail = null;        // exercise id for the exercise-detail view
-let recoveryDetail = false; // recovery-detail view
+// Progress segment: 'training' | 'body' | 'recovery'
+let progressSeg = 'training';
+// Drill-down screens. When set, the owning tab renders a detail screen
+// instead of its top level.
+let exDetail = null;   // exercise id for the exercise-detail view (Progress)
+let dayDetail = null;  // ISO date for the day view (Today / History)
 
 // ---------- helpers ----------
 const h = (strings, ...vals) => strings.reduce((a, s, i) => a + s + (vals[i] ?? ''), '');
@@ -127,47 +129,161 @@ function openModal(title, bodyHTML) {
 function closeModal() { modalRoot.innerHTML = ''; }
 
 // ---------- router ----------
-const TITLES = { week: 'This Week', log: 'Log a Session', progress: 'Progress', history: 'History', setup: 'Setup' };
+const TITLES = { today: 'Today', plan: 'This Week', log: 'Log', progress: 'Progress', history: 'History', setup: 'Setup' };
 function setTab(tab) {
   // tapping a tab always lands on that tab's top level (clear any drill-down)
-  exDetail = null; recoveryDetail = false;
+  exDetail = null; dayDetail = null;
   currentTab = tab;
-  document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === tab));
+  highlightTab(tab);
   titleEl.textContent = TITLES[tab];
   render();
   window.scrollTo(0, 0);
 }
+function highlightTab(tab) {
+  document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === tab));
+}
 
-// Open a Progress drill-down without going through setTab (which would clear it).
+// Open a drill-down without going through setTab (which would clear it).
 function gotoProgress() {
   currentTab = 'progress';
-  document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === 'progress'));
+  highlightTab('progress');
   render();
   window.scrollTo(0, 0);
 }
-function openExerciseDetail(id) { exDetail = id; recoveryDetail = false; gotoProgress(); }
-function openRecoveryDetail() { recoveryDetail = true; exDetail = null; gotoProgress(); }
-document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => {
-  if (b.dataset.tab === 'log' && !workout) { draft = null; }
-  setTab(b.dataset.tab);
-}));
+function openExerciseDetail(id) { exDetail = id; gotoProgress(); }
+function openRecoveryDetail() { progressSeg = 'recovery'; exDetail = null; gotoProgress(); }
+// Day view: everything logged on one date, editable in one place.
+function openDay(date) {
+  dayDetail = date;
+  if (currentTab !== 'today' && currentTab !== 'history') { currentTab = 'history'; highlightTab('history'); }
+  render();
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll('.tab[data-tab]').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+// Center ＋ button: resume an in-progress workout/draft, otherwise open the log sheet.
+document.getElementById('logBtn').addEventListener('click', () => {
+  if (workout || draft) setTab('log');
+  else openLogSheet();
+});
+document.getElementById('setupBtn').addEventListener('click', () => setTab('setup'));
 
 function render() {
   const range = weekRange();
-  weekLabelEl.textContent = currentTab === 'week' ? fmtWeekLabel(range) : '';
-  if (currentTab === 'week') renderWeek();
+  weekLabelEl.textContent = currentTab === 'plan' ? fmtWeekLabel(range)
+    : currentTab === 'today' && !dayDetail ? fmtDate(todayISO()) : '';
+  if (currentTab === 'today') { if (dayDetail) renderDay(dayDetail); else renderToday(); }
+  else if (currentTab === 'plan') renderPlan();
   else if (currentTab === 'log') renderLog();
   else if (currentTab === 'progress') {
     if (exDetail) renderExerciseDetail(exDetail);
-    else if (recoveryDetail) renderRecoveryDetail();
     else renderProgress();
   }
-  else if (currentTab === 'history') renderHistory();
+  else if (currentTab === 'history') { if (dayDetail) renderDay(dayDetail); else renderHistory(); }
   else if (currentTab === 'setup') renderSetup();
 }
 
-// ================= WEEK DASHBOARD =================
-function renderWeek() {
+// ================= TODAY (home) =================
+// Action-first: what should I do right now? Analytics live on the Plan tab.
+function renderToday() {
+  viewEl.innerHTML = h`
+    ${readinessCardHTML()}
+    ${nextWorkoutHeroHTML()}
+    ${todayChecklistHTML()}
+    ${weekStripCardHTML()}
+    ${backupNudgeHTML()}
+  `;
+
+  const startBtn = document.getElementById('heroStart');
+  if (startBtn) startBtn.addEventListener('click', () => startWorkout(nextTemplate()));
+  const rdCard = document.getElementById('readinessCard');
+  if (rdCard) rdCard.addEventListener('click', openRecoveryDetail);
+  viewEl.querySelectorAll('[data-checkin]').forEach((b) => b.addEventListener('click', () => openCheckin(todayISO(), b.dataset.checkin)));
+  const pBtn = document.getElementById('addProtein');
+  if (pBtn) pBtn.addEventListener('click', () => proteinPrompt());
+  viewEl.querySelectorAll('[data-day]').forEach((b) => b.addEventListener('click', () => openDay(b.dataset.day)));
+  const planLink = document.getElementById('gotoPlan');
+  if (planLink) planLink.addEventListener('click', () => setTab('plan'));
+  const nudgeBtn = document.getElementById('nudgeExport');
+  if (nudgeBtn) nudgeBtn.addEventListener('click', () => { doExport(); renderToday(); });
+}
+
+// One card for the day's three habits: morning check-in, evening check-in, protein.
+function todayChecklistHTML() {
+  const j = get().journal[todayISO()];
+  const mDone = morningDone(j), eDone = eveningDone(j);
+  const streak = checkinStreak();
+  const mStatus = mDone
+    ? [j.sleepMin != null ? fmtSleepMin(j.sleepMin) : null, j.sleepDiff ? `Sleep ${j.sleepDiff}/5` : null, j.bw != null ? fmtBw(j.bw) : null].filter(Boolean).join(' · ') || 'Logged'
+    : "Last night's sleep";
+  const eStatus = eDone
+    ? [j.drinks != null ? `${j.drinks} drink${j.drinks === 1 ? '' : 's'}` : null, j.stress ? `stress ${j.stress}/5` : null].filter(Boolean).join(' · ') || 'Logged'
+    : 'How the day went';
+  const target = proteinTarget();
+  const proteinToday = get().proteinLog[todayISO()] || 0;
+  const pPct = Math.min(1, proteinToday / target);
+  const pDone = proteinToday >= target;
+  return h`<div class="card">
+    <div class="card__title"><h2>Daily check-ins</h2><span class="card__hint">${streak >= 2 ? `🔥 ${streak}-day streak` : 'recovery journal'}</span></div>
+    <div class="checkin-row">
+      <span class="checkin-row__ico">🌅</span>
+      <div class="checkin-row__body"><div class="checkin-row__t">Morning ${mDone ? '<span class="checkin-tick">✓</span>' : ''}</div><div class="small muted">${esc(mStatus)}</div></div>
+      <button class="btn btn--sm ${mDone ? 'btn--ghost' : ''}" data-checkin="morning">${mDone ? 'Edit' : 'Log'}</button>
+    </div>
+    <div class="checkin-row">
+      <span class="checkin-row__ico">🌙</span>
+      <div class="checkin-row__body"><div class="checkin-row__t">Evening ${eDone ? '<span class="checkin-tick">✓</span>' : ''}</div><div class="small muted">${esc(eStatus)}</div></div>
+      <button class="btn btn--sm ${eDone ? 'btn--ghost' : ''}" data-checkin="evening">${eDone ? 'Edit' : 'Log'}</button>
+    </div>
+    <div class="checkin-row">
+      <span class="checkin-row__ico">🍗</span>
+      <div class="checkin-row__body">
+        <div class="checkin-row__t">Protein ${pDone ? '<span class="checkin-tick">✓</span>' : ''}</div>
+        <div class="mbar__track" style="margin:5px 0 3px"><div class="mbar__fill" style="width:${(pPct * 100).toFixed(0)}%;background:var(--accent-2)"></div></div>
+        <div class="small muted">${proteinToday} / ${target} g</div>
+      </div>
+      <button class="btn btn--sm ${pDone ? 'btn--ghost' : ''}" id="addProtein">${proteinToday ? 'Edit' : 'Log'}</button>
+    </div>
+  </div>`;
+}
+
+// Compact week strip: one tappable dot per day (Mon–Sun) + MVW status line.
+function weekStripCardHTML() {
+  const a = aggregateWeek();
+  const range = weekRange();
+  const today = todayISO();
+  const byDate = {};
+  get().sessions.forEach((x) => {
+    const rec = (byDate[x.date] = byDate[x.date] || { lift: false, cardio: false });
+    if (x.kind === 'strength') rec.lift = true; else rec.cardio = true;
+  });
+  const dots = [];
+  for (let i = 0; i < 7; i++) {
+    const d = addDaysISO(range.startISO, i);
+    const r = byDate[d];
+    const future = d > today;
+    const color = future ? 'transparent'
+      : r && r.lift && r.cardio ? 'var(--good)'
+      : r && r.lift ? 'var(--chart-1)'
+      : r && r.cardio ? 'var(--chart-2)'
+      : 'var(--card-2)';
+    const letter = new Date(d + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'narrow' });
+    dots.push(h`<button class="daydot ${d === today ? 'is-today' : ''}" data-day="${d}" ${future ? 'disabled' : ''}>
+      <span class="daydot__dot" style="background:${color}"></span><span class="daydot__l">${letter}</span>
+    </button>`);
+  }
+  const mvw = a.mvw;
+  const status = mvw.met
+    ? '✅ Minimum viable week met'
+    : `Lifts <b>${mvw.liftSessions}</b>/2 · Patterns <b>${mvw.patternsCovered}</b>/4 · Cardio <b>${mvw.totalCardioMin}</b>/75m`;
+  return h`<div class="card">
+    <div class="card__title"><h2>This week</h2><button class="linkbtn" id="gotoPlan">Weekly plan →</button></div>
+    <div class="daydots">${dots.join('')}</div>
+    <div class="small muted mt">${status} · tap a day to view or edit it</div>
+  </div>`;
+}
+
+// ================= PLAN (weekly dashboard) =================
+function renderPlan() {
   const a = aggregateWeek();
   const t = a.targets;
 
@@ -237,13 +353,7 @@ function renderWeek() {
     </div>`).join('')
     : `<div class="muted small">Log a couple of lifts and progression suggestions will appear here.</div>`;
 
-  const protein = proteinTarget();
-  const proteinToday = get().proteinLog[todayISO()] || 0;
-  const proteinPct = Math.min(1, proteinToday / protein);
-
   viewEl.innerHTML = h`
-    ${nextWorkoutHeroHTML()}
-    ${readinessCardHTML()}
     <div class="card">${rings}</div>
     ${mvwCard}
 
@@ -262,31 +372,7 @@ function renderWeek() {
       <div class="card__title"><h2>Progression queue</h2><span class="card__hint">auto-adjusted</span></div>
       ${sugHTML}
     </div>
-
-    <div class="card">
-      <div class="card__title"><h2>Protein today</h2><span class="card__hint">${protein} g target</span></div>
-      <div class="mbar__track"><div class="mbar__fill" style="width:${(proteinPct*100).toFixed(0)}%;background:var(--accent-2)"></div></div>
-      <div class="row-between mt">
-        <span class="muted small">${proteinToday} / ${protein} g (${get().settings.proteinPerKg} g/kg)</span>
-        <button class="btn btn--sm" id="addProtein">Log protein</button>
-      </div>
-    </div>
-
-    ${checkinCardHTML()}
-    ${backupNudgeHTML()}
-
-    <button class="btn btn--primary" id="goLog">＋ Log a session</button>
   `;
-
-  document.getElementById('goLog').addEventListener('click', () => { draft = null; setTab('log'); });
-  document.getElementById('addProtein').addEventListener('click', proteinPrompt);
-  const nudgeBtn = document.getElementById('nudgeExport');
-  if (nudgeBtn) nudgeBtn.addEventListener('click', () => { doExport(); renderWeek(); });
-  const rdCard = document.getElementById('readinessCard');
-  if (rdCard) rdCard.addEventListener('click', openRecoveryDetail);
-  viewEl.querySelectorAll('[data-checkin]').forEach((b) => b.addEventListener('click', () => openCheckin(todayISO(), b.dataset.checkin)));
-  const startBtn = document.getElementById('heroStart');
-  if (startBtn) startBtn.addEventListener('click', () => startWorkout(nextTemplate()));
 }
 
 // ---- "Next workout" hero (StrongLifts-style home) ----
@@ -360,32 +446,6 @@ function checkinStreak() {
   return n;
 }
 
-// "Daily check-ins" quick card on the home dashboard: morning + evening rows.
-function checkinCardHTML() {
-  const j = get().journal[todayISO()];
-  const mDone = morningDone(j), eDone = eveningDone(j);
-  const streak = checkinStreak();
-  const mStatus = mDone
-    ? [j.sleepMin != null ? fmtSleepMin(j.sleepMin) : null, j.sleepDiff ? `Sleep ${j.sleepDiff}/5` : null, j.bw != null ? fmtBw(j.bw) : null].filter(Boolean).join(' · ') || 'Logged'
-    : "Last night's sleep";
-  const eStatus = eDone
-    ? [j.drinks != null ? `${j.drinks} drink${j.drinks === 1 ? '' : 's'}` : null, j.stress ? `stress ${j.stress}/5` : null].filter(Boolean).join(' · ') || 'Logged'
-    : 'How the day went';
-  return h`<div class="card">
-    <div class="card__title"><h2>Daily check-ins</h2><span class="card__hint">${streak >= 2 ? `🔥 ${streak}-day streak` : 'recovery journal'}</span></div>
-    <div class="checkin-row">
-      <span class="checkin-row__ico">🌅</span>
-      <div class="checkin-row__body"><div class="checkin-row__t">Morning ${mDone ? '<span class="checkin-tick">✓</span>' : ''}</div><div class="small muted">${esc(mStatus)}</div></div>
-      <button class="btn btn--sm ${mDone ? 'btn--ghost' : ''}" data-checkin="morning">${mDone ? 'Edit' : 'Log'}</button>
-    </div>
-    <div class="checkin-row">
-      <span class="checkin-row__ico">🌙</span>
-      <div class="checkin-row__body"><div class="checkin-row__t">Evening ${eDone ? '<span class="checkin-tick">✓</span>' : ''}</div><div class="small muted">${esc(eStatus)}</div></div>
-      <button class="btn btn--sm ${eDone ? 'btn--ghost' : ''}" data-checkin="evening">${eDone ? 'Edit' : 'Log'}</button>
-    </div>
-  </div>`;
-}
-
 // Gentle backup reminder: months of logs living only in localStorage is a
 // dataset one cleared cache away from gone. Quiet when cloud sync is on.
 const BACKUP_KEY = 'ct_last_backup';
@@ -404,15 +464,18 @@ function backupNudgeHTML() {
   </div>`;
 }
 
-function proteinPrompt() {
-  const cur = get().proteinLog[todayISO()] || 0;
+// Log or correct protein for any date (defaults to today).
+function proteinPrompt(date) {
+  date = date || todayISO();
+  const isToday = date === todayISO();
+  const cur = get().proteinLog[date] || 0;
   const target = proteinTarget();
-  openModal('Protein today (g)', h`
+  openModal(isToday ? 'Protein today (g)' : `Protein · ${relDay(date)}`, h`
     <div class="small muted" style="margin-bottom:8px">Quick-add a meal, or set the day's total. Target: <b>${target} g</b>.</div>
     <div class="btn-row mb">
       ${[10, 20, 30, 40].map((g) => `<button class="btn btn--sm" data-padd="${g}">＋${g}g</button>`).join('')}
     </div>
-    <label class="field"><span>Total protein consumed today</span>
+    <label class="field"><span>Total protein consumed ${isToday ? 'today' : 'that day'}</span>
       <input type="number" id="pval" inputmode="numeric" value="${cur}" /></label>
     <button class="btn btn--primary" id="psave">Save</button>
   `);
@@ -423,28 +486,38 @@ function proteinPrompt() {
   }));
   document.getElementById('psave').addEventListener('click', () => {
     const v = Math.max(0, Number(document.getElementById('pval').value) || 0);
-    update((s) => { s.proteinLog[todayISO()] = v; });
+    update((s) => { s.proteinLog[date] = v; });
     closeModal(); toast('Protein logged'); render();
   });
 }
 
 // ================= LOG =================
+// The 'log' tab only ever shows an in-progress workout or draft; picking WHAT
+// to log happens in a bottom sheet (openLogSheet) available from any screen.
 function renderLog() {
   if (workout) return renderWorkout();
   if (draft) return renderDraft();
-  viewEl.innerHTML = h`
+  setTab('today');
+  openLogSheet();
+}
+
+// Bottom sheet with everything you can log, grouped by intent.
+function openLogSheet(date) {
+  const tpl = nextTemplate();
+  openModal('', h`
+    <div class="section-label" style="margin-top:0">Train</div>
     <div class="logchoice">
       <button class="logchoice__btn logchoice__btn--hero" data-log="guided">
         <span class="logchoice__ico">🏋️</span>
-        <span><span class="logchoice__t">Start guided workout</span><span class="logchoice__d">Target weights auto-set · tap-to-complete sets · rest timer · auto-progression</span></span>
+        <span><span class="logchoice__t">Guided workout</span><span class="logchoice__d">Next up: ${esc(tpl.name)} — targets set, rest timer, auto-progression</span></span>
       </button>
       <button class="logchoice__btn" data-log="strength">
         <span class="logchoice__ico">📝</span>
-        <span><span class="logchoice__t">Free-form strength log</span><span class="logchoice__d">Build a session manually — any exercises, sets, reps & RIR</span></span>
+        <span><span class="logchoice__t">Free-form strength</span><span class="logchoice__d">Any exercises, sets, reps & RIR</span></span>
       </button>
       <button class="logchoice__btn" data-log="zone2">
         <span class="logchoice__ico">🚴</span>
-        <span><span class="logchoice__t">Zone 2 cardio</span><span class="logchoice__d">Easy, conversational — builds your aerobic base</span></span>
+        <span><span class="logchoice__t">Zone 2 cardio</span><span class="logchoice__d">Easy, conversational — aerobic base</span></span>
       </button>
       <button class="logchoice__btn" data-log="interval">
         <span class="logchoice__ico">🔥</span>
@@ -452,21 +525,25 @@ function renderLog() {
       </button>
       <button class="logchoice__btn" data-log="activity">
         <span class="logchoice__ico">🧗</span>
-        <span><span class="logchoice__t">Other activity</span><span class="logchoice__d">Climbing, outdoor ride, hike — mapped to what it replaces</span></span>
+        <span><span class="logchoice__t">Other activity</span><span class="logchoice__d">Climbing, outdoor ride, hike…</span></span>
       </button>
+    </div>
+    <div class="section-label">Check in</div>
+    <div class="logchoice">
       <button class="logchoice__btn" data-log="morning">
         <span class="logchoice__ico">🌅</span>
-        <span><span class="logchoice__t">Morning check-in</span><span class="logchoice__d">Last night's sleep, morning weigh-in & how you woke up</span></span>
+        <span><span class="logchoice__t">Morning check-in</span><span class="logchoice__d">Sleep, weigh-in & how you woke up</span></span>
       </button>
       <button class="logchoice__btn" data-log="evening">
         <span class="logchoice__ico">🌙</span>
-        <span><span class="logchoice__t">Evening check-in</span><span class="logchoice__d">Drinks, stress, pre-sleep activity & notes on the day</span></span>
+        <span><span class="logchoice__t">Evening check-in</span><span class="logchoice__d">Drinks, stress & notes on the day</span></span>
       </button>
     </div>
-  `;
-  viewEl.querySelectorAll('[data-log]').forEach((b) => b.addEventListener('click', () => {
+  `);
+  modalRoot.querySelectorAll('[data-log]').forEach((b) => b.addEventListener('click', () => {
+    closeModal();
     if (b.dataset.log === 'guided') templatePickerForWorkout();
-    else startDraft(b.dataset.log);
+    else startDraft(b.dataset.log, date);
   }));
 }
 
@@ -504,6 +581,7 @@ function startWorkout(tpl) {
     }),
   };
   timer.stop();
+  logReturn = null; // a finished/discarded workout always lands on Today
   setTab('log');
 }
 
@@ -598,7 +676,7 @@ function renderWorkout() {
     openModal('Cancel workout?', `<p class="muted">This discards the in-progress workout. Nothing is saved.</p>
       <div class="btn-row mt"><button class="btn btn--ghost" id="woKeep">Keep going</button><button class="btn btn--danger" id="woDiscard">Discard</button></div>`);
     document.getElementById('woKeep').addEventListener('click', closeModal);
-    document.getElementById('woDiscard').addEventListener('click', () => { workout = null; timer.stop(); closeModal(); setTab('week'); });
+    document.getElementById('woDiscard').addEventListener('click', () => { workout = null; timer.stop(); closeModal(); setTab('today'); });
   });
   document.getElementById('woFinish').addEventListener('click', finishWorkout);
   document.getElementById('woAddEx').addEventListener('click', addExerciseToWorkout);
@@ -690,24 +768,47 @@ function showWorkoutSummary(summary) {
     ${rows || '<div class="muted small">Logged.</div>'}
     <button class="btn btn--primary mt" id="woDone">Done</button>
   `);
-  document.getElementById('woDone').addEventListener('click', () => { closeModal(); setTab('week'); });
+  document.getElementById('woDone').addEventListener('click', () => { closeModal(); setTab('today'); });
 }
 
 function diffLabel(d) { return { easy: '😌 Easy', good: '🙂 Good', hard: '😤 Hard', failed: '✗ Failed' }[d] || d; }
 
-function startDraft(kind) {
-  if (kind === 'strength') {
-    draft = { kind: 'strength', date: todayISO(), entries: [], note: '' };
-    renderDraft();
-  } else if (kind === 'zone2' || kind === 'interval') {
-    draft = { kind: 'cardio', cardioType: kind, date: todayISO(), durationMin: kind === 'interval' ? 25 : 50, avgHR: '', note: '' };
-    renderDraft();
-  } else if (kind === 'activity') {
-    draft = { kind: 'activity', activity: 'climbing', date: todayISO(), durationMin: 60, note: '' };
-    renderDraft();
-  } else if (kind === 'morning' || kind === 'evening') {
-    openCheckin(todayISO(), kind);
+// Where to land when a log flow (draft editor / check-in) saves or cancels:
+// back to the screen it was opened from, so editing an old entry from a day
+// view or History returns you there instead of dumping you on Today.
+let logReturn = null;
+function enterLog() {
+  if (currentTab !== 'log') logReturn = { tab: currentTab, day: dayDetail };
+  setTab('log');
+}
+function exitLog() {
+  const r = logReturn; logReturn = null;
+  if (r && r.day) {
+    currentTab = r.tab === 'today' ? 'today' : 'history';
+    highlightTab(currentTab);
+    openDay(r.day);
+  } else if (r && r.tab && r.tab !== 'log') {
+    setTab(r.tab);
+  } else {
+    setTab('today');
   }
+}
+
+// Start a fresh draft; `date` (optional) backdates it — used by the day view
+// to add a forgotten session to a past day.
+function startDraft(kind, date) {
+  date = date || todayISO();
+  if (kind === 'strength') {
+    draft = { kind: 'strength', date, entries: [], note: '' };
+  } else if (kind === 'zone2' || kind === 'interval') {
+    draft = { kind: 'cardio', cardioType: kind, date, durationMin: kind === 'interval' ? 25 : 50, avgHR: '', note: '' };
+  } else if (kind === 'activity') {
+    draft = { kind: 'activity', activity: 'climbing', date, durationMin: 60, note: '' };
+  } else if (kind === 'morning' || kind === 'evening') {
+    openCheckin(date, kind);
+    return;
+  } else return;
+  enterLog();
 }
 
 // Open the daily check-in for a date & part (pre-filled if one exists). Jumps to Log.
@@ -722,7 +823,7 @@ function openCheckin(date, part) {
     entry: { ...(get().journal[date] || {}) },
     yDrinks: yd.drinks ?? null, yDrinks0: yd.drinks ?? null,
   };
-  if (currentTab === 'log') renderDraft(); else setTab('log');
+  if (currentTab === 'log') renderDraft(); else enterLog();
 }
 
 function addDaysISO(iso, n) {
@@ -792,7 +893,7 @@ function renderStrengthDraft() {
   document.getElementById('dNote').addEventListener('input', (e) => { draft.note = e.target.value; });
   document.getElementById('addExercise').addEventListener('click', () => exercisePicker());
   document.getElementById('pickTemplate').addEventListener('click', templatePicker);
-  document.getElementById('cancelDraft').addEventListener('click', () => { draft = null; renderLog(); });
+  document.getElementById('cancelDraft').addEventListener('click', () => { draft = null; exitLog(); });
   document.getElementById('saveDraft').addEventListener('click', saveStrengthDraft);
 
   // capture set input edits
@@ -899,7 +1000,7 @@ function saveStrengthDraft() {
       s.sessions.push({ id: uid(), kind: 'strength', date: draft.date, entries, note: draft.note, loggedAt: now, updatedAt: now });
     }
   });
-  draft = null; toast(editing ? 'Session updated' : 'Session saved'); setTab('week');
+  draft = null; toast(editing ? 'Session updated' : 'Session saved'); exitLog();
 }
 
 // ---- cardio draft ----
@@ -924,7 +1025,7 @@ function renderCardioDraft() {
       <button class="btn btn--ghost" id="cancelDraft">Cancel</button>
       <button class="btn btn--primary" id="saveCardio">${draft.editId ? 'Update' : 'Save'}</button>
     </div>`;
-  document.getElementById('cancelDraft').addEventListener('click', () => { draft = null; renderLog(); });
+  document.getElementById('cancelDraft').addEventListener('click', () => { draft = null; exitLog(); });
   document.getElementById('saveCardio').addEventListener('click', () => {
     const dur = Number(document.getElementById('cDur').value) || 0;
     if (dur <= 0) { toast('Enter a duration'); return; }
@@ -947,7 +1048,7 @@ function renderCardioDraft() {
       }
     });
     const edited = !!draft.editId;
-    draft = null; toast(edited ? 'Cardio updated' : 'Cardio saved'); setTab('week');
+    draft = null; toast(edited ? 'Cardio updated' : 'Cardio saved'); exitLog();
   });
 }
 
@@ -969,7 +1070,7 @@ function renderActivityDraft() {
       <button class="btn btn--primary" id="saveAct">${draft.editId ? 'Update' : 'Save'}</button>
     </div>`;
   document.getElementById('aType').addEventListener('change', (e) => { draft.activity = e.target.value; draft.durationMin = Number(document.getElementById('aDur').value) || draft.durationMin; renderActivityDraft(); });
-  document.getElementById('cancelDraft').addEventListener('click', () => { draft = null; renderLog(); });
+  document.getElementById('cancelDraft').addEventListener('click', () => { draft = null; exitLog(); });
   document.getElementById('saveAct').addEventListener('click', () => {
     const dur = Number(document.getElementById('aDur').value) || 0;
     if (dur <= 0) { toast('Enter a duration'); return; }
@@ -987,7 +1088,7 @@ function renderActivityDraft() {
       }
     });
     const edited = !!draft.editId;
-    draft = null; toast(edited ? 'Activity updated' : 'Activity saved'); setTab('week');
+    draft = null; toast(edited ? 'Activity updated' : 'Activity saved'); exitLog();
   });
 }
 
@@ -1177,7 +1278,7 @@ function renderCheckinDraft() {
     draft.entry[key] = arr;
     haptic(8); renderCheckinDraft();
   }));
-  document.getElementById('cancelDraft').addEventListener('click', () => { draft = null; setTab('week'); });
+  document.getElementById('cancelDraft').addEventListener('click', () => { draft = null; exitLog(); });
   document.getElementById('saveJournal').addEventListener('click', saveCheckin);
 }
 
@@ -1219,7 +1320,7 @@ function saveCheckin() {
     }
     if (entry.bw != null) s.settings.bodyweightKg = Math.round(entry.bw * 10) / 10; // keep profile fresh
   });
-  draft = null; toast(`${partLabel} check-in saved`); setTab('week');
+  draft = null; toast(`${partLabel} check-in saved`); exitLog();
 }
 
 // ================= PROGRESS =================
@@ -1256,14 +1357,37 @@ function lastNWeeks(n) {
   return weeks;
 }
 
+// Progress is split into three focused segments instead of one endless scroll:
+// Training (volume & strength), Body (weight, waist, protein), Recovery
+// (readiness, sleep, load & insights).
 function renderProgress() {
   titleEl.textContent = 'Progress';
+  const segs = [['training', 'Training'], ['body', 'Body'], ['recovery', 'Recovery']];
+  const segBar = `<div class="seg seg--even seg--3">${segs.map(([k, l]) =>
+    `<button class="segbtn ${progressSeg === k ? 'is-active' : ''}" data-seg="${k}">${l}</button>`).join('')}</div>`;
+  const body = progressSeg === 'body' ? progressBodyHTML()
+    : progressSeg === 'recovery' ? progressRecoveryHTML()
+    : progressTrainingHTML();
+  viewEl.innerHTML = segBar + body;
+
+  viewEl.querySelectorAll('[data-seg]').forEach((b) => b.addEventListener('click', () => {
+    if (progressSeg === b.dataset.seg) return;
+    progressSeg = b.dataset.seg; renderProgress(); window.scrollTo(0, 0);
+  }));
+  viewEl.querySelectorAll('[data-ex]').forEach((b) => b.addEventListener('click', () => {
+    progressSel = b.dataset.ex; renderProgress();
+  }));
+  viewEl.querySelectorAll('[data-exdetail]').forEach((b) => b.addEventListener('click', () => openExerciseDetail(b.dataset.exdetail)));
+  mountTips(viewEl);
+}
+
+// ---- Training segment ----
+function progressTrainingHTML() {
   const sessions = get().sessions;
   const strengthSessions = sessions.filter((s) => s.kind === 'strength');
 
   if (!sessions.length) {
-    viewEl.innerHTML = `<div class="empty"><div class="empty__ico">📈</div>No data to chart yet.<br>Log a few sessions and your progress shows up here.</div>`;
-    return;
+    return `<div class="empty"><div class="empty__ico">📈</div>No data to chart yet.<br>Log a few sessions and your progress shows up here.</div>`;
   }
 
   // ---- headline stats ----
@@ -1364,9 +1488,15 @@ function renderProgress() {
       : '<div class="chart-empty">No cardio logged in the last 8 weeks.</div>'}
   </div>`;
 
-  // ---- bodyweight trend (line, from journal weigh-ins) ----
+  return stats + consistencyCard() + strengthCard + volCard + cardioCard;
+}
+
+// ---- Body segment: bodyweight, waist & protein adherence ----
+function progressBodyHTML() {
   const journal = get().journal;
   const u = bwUnit();
+
+  // bodyweight trend (line, from journal weigh-ins)
   const bwDates = Object.keys(journal).filter((d) => journal[d].bw != null).sort();
   let bwCard = '';
   if (bwDates.length >= 2) {
@@ -1383,7 +1513,7 @@ function renderProgress() {
     </div>`;
   }
 
-  // ---- waist trend (line, from journal measurements) ----
+  // waist trend (line, from journal measurements)
   const waistDates = Object.keys(journal).filter((d) => journal[d].waist != null).sort();
   let waistCard = '';
   if (waistDates.length >= 2) {
@@ -1397,30 +1527,7 @@ function renderProgress() {
     </div>`;
   }
 
-  // ---- recovery: weekly avg sleep difficulty (line, weeks with data) ----
-  const sleepPts = weeks8.map((w) => {
-    const vals = Object.keys(journal).filter((d) => d >= w.startISO && d <= w.endISO && journal[d].sleepDiff)
-      .map((d) => journal[d].sleepDiff);
-    return vals.length ? { t: w.label, full: `Week of ${w.label}`, v: Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 } : null;
-  }).filter(Boolean);
-  const anyRecovery = recoveryDates().length > 0;
-  const recoveryCard = h`<div class="card">
-    <div class="card__title"><h2>Sleep &amp; recovery</h2><span class="card__hint">weekly avg · 1 easy–5 hard</span></div>
-    ${sleepPts.length >= 2
-      ? lineChart(sleepPts, { yFmt: (v) => String(v), valFmt: (v) => `${v}/5`, color: '--chart-1' })
-      : '<div class="chart-empty">Log sleep difficulty on a few nights to see the trend.</div>'}
-    ${anyRecovery ? `<div class="row-between mt"><span></span><button class="linkbtn" data-recovery>Recovery details →</button></div>` : ''}
-  </div>`;
-
-  viewEl.innerHTML = stats + consistencyCard() + strengthCard + bwCard + waistCard + volCard + cardioCard + recoveryCard;
-
-  viewEl.querySelectorAll('[data-ex]').forEach((b) => b.addEventListener('click', () => {
-    progressSel = b.dataset.ex; renderProgress();
-  }));
-  viewEl.querySelectorAll('[data-exdetail]').forEach((b) => b.addEventListener('click', () => openExerciseDetail(b.dataset.exdetail)));
-  const recBtn = viewEl.querySelector('[data-recovery]');
-  if (recBtn) recBtn.addEventListener('click', openRecoveryDetail);
-  mountTips(viewEl);
+  return bwCard + waistCard + proteinBodyweightCard();
 }
 
 // short date for chart x-axis, e.g. "Jul 5"
@@ -1559,9 +1666,8 @@ function renderExerciseDetail(id) {
   mountTips(viewEl);
 }
 
-// ---- recovery detail (drill-down; Fitbit-ready) ----
-function renderRecoveryDetail() {
-  titleEl.textContent = 'Recovery';
+// ---- Recovery segment (Fitbit-ready) ----
+function progressRecoveryHTML() {
   const dates = recoveryDates();
   const weeks8 = lastNWeeks(8);
 
@@ -1644,7 +1750,6 @@ function renderRecoveryDetail() {
   const load = trainingLoadCard();
   const alcohol = alcoholSleepInsight();
   const sorenessCard = sorenessTrainingInsight();
-  const proteinCard = proteinBodyweightCard();
 
   // Fitbit seam: prompt to connect until measured data lands.
   const device = hasDeviceData() ? '' : h`<div class="card card--seam">
@@ -1655,10 +1760,8 @@ function renderRecoveryDetail() {
     <button class="btn btn--sm" id="fitbitSoon" disabled>Connect Fitbit (soon)</button>
   </div>`;
 
-  viewEl.innerHTML = detailBackBar('Progress') + rdCard + load + sleepCard + sleepDurCard + rhrCard
-    + drinkCard + latestCard + insight + alcohol + sorenessCard + proteinCard + device;
-  viewEl.querySelector('[data-back]').addEventListener('click', () => { recoveryDetail = false; render(); });
-  mountTips(viewEl);
+  return rdCard + load + sleepCard + sleepDurCard + rhrCard
+    + drinkCard + latestCard + insight + alcohol + sorenessCard + device;
 }
 
 // ---- acute:chronic workload ratio (ACWR) ----
@@ -1820,12 +1923,15 @@ function sessionVolume(s) {
   }, 0);
 }
 
+// history filter: all | lifts | cardio | checkins
+let histFilter = 'all';
+
 function renderHistory() {
   const sessions = [...get().sessions].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   const journal = get().journal;
   const journalDates = Object.keys(journal);
   if (!sessions.length && !journalDates.length) {
-    viewEl.innerHTML = `<div class="empty"><div class="empty__ico">📭</div>No sessions yet.<br>Tap <b>Log</b> to start your first workout.</div>`;
+    viewEl.innerHTML = `<div class="empty"><div class="empty__ico">📭</div>No sessions yet.<br>Tap <b>＋</b> to log your first workout.</div>`;
     return;
   }
 
@@ -1839,10 +1945,20 @@ function renderHistory() {
     <div class="histsum__item"><b>${cardioMin}</b><span>cardio min</span></div>
   </div>`;
 
+  // filter chips
+  const FILTERS = [['all', 'All'], ['lifts', '🏋️ Lifts'], ['cardio', '🚴 Cardio'], ['checkins', '📓 Check-ins']];
+  const chips = `<div class="seg">${FILTERS.map(([k, l]) =>
+    `<button class="segbtn ${histFilter === k ? 'is-active' : ''}" data-filter="${k}">${l}</button>`).join('')}</div>`;
+
+  const wantSession = (s) => histFilter === 'all'
+    || (histFilter === 'lifts' && s.kind === 'strength')
+    || (histFilter === 'cardio' && (s.kind === 'cardio' || s.kind === 'activity'));
+  const wantJournal = histFilter === 'all' || histFilter === 'checkins';
+
   // merge sessions + daily check-ins into one date-sorted list
   const records = [
-    ...sessions.map((s) => ({ date: s.date, kind: 'session', s })),
-    ...journalDates.map((d) => ({ date: d, kind: 'journal', j: journal[d] })),
+    ...sessions.filter(wantSession).map((s) => ({ date: s.date, kind: 'session', s })),
+    ...(wantJournal ? journalDates.map((d) => ({ date: d, kind: 'journal', j: journal[d] })) : []),
   ].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 
   const groups = [];
@@ -1851,14 +1967,94 @@ function renderHistory() {
     if (!cur || cur.date !== r.date) { cur = { date: r.date, items: [] }; groups.push(cur); }
     cur.items.push(r);
   });
-  const groupsHTML = groups.map((g) => h`
-    <div class="section-label">${relDay(g.date)}</div>
+  const groupsHTML = groups.length ? groups.map((g) => h`
+    <button class="dayhead" data-dayopen="${g.date}"><span>${relDay(g.date)}</span><span class="dayhead__chev">›</span></button>
     ${g.items.map((r) => r.kind === 'journal' ? journalHistoryItem(r.date, r.j) : historyItem(r.s)).join('')}
-  `).join('');
+  `).join('') : `<div class="empty"><div class="empty__ico">🔍</div>Nothing matches this filter yet.</div>`;
 
-  viewEl.innerHTML = summary + groupsHTML;
+  viewEl.innerHTML = summary + chips + groupsHTML;
+  viewEl.querySelectorAll('[data-filter]').forEach((el) => el.addEventListener('click', () => {
+    histFilter = el.dataset.filter; renderHistory();
+  }));
+  viewEl.querySelectorAll('[data-dayopen]').forEach((el) => el.addEventListener('click', () => openDay(el.dataset.dayopen)));
   viewEl.querySelectorAll('[data-session]').forEach((el) => el.addEventListener('click', () => sessionDetail(el.dataset.session)));
-  viewEl.querySelectorAll('[data-journal]').forEach((el) => el.addEventListener('click', () => openCheckin(el.dataset.journal, 'morning')));
+  viewEl.querySelectorAll('[data-journal]').forEach((el) => el.addEventListener('click', () => {
+    const d = el.dataset.journal;
+    const j = get().journal[d];
+    // open the half that actually has data (evening-only entries used to open on morning)
+    openCheckin(d, !morningDone(j) && eveningDone(j) ? 'evening' : 'morning');
+  }));
+}
+
+// ================= DAY VIEW =================
+// One screen per date: every session, both check-in halves and protein —
+// all editable, plus quick-add for anything forgotten that day.
+function renderDay(date) {
+  titleEl.textContent = relDay(date);
+  weekLabelEl.textContent = fmtDate(date);
+  const s = get();
+  const daySessions = s.sessions.filter((x) => x.date === date)
+    .sort((a, b) => ((a.startedAt || a.loggedAt || '') < (b.startedAt || b.loggedAt || '') ? -1 : 1));
+  const j = s.journal[date];
+  const backLabel = currentTab === 'today' ? 'Today' : 'History';
+
+  const sessionsHTML = daySessions.length
+    ? daySessions.map((x) => historyItem(x)).join('')
+    : `<div class="muted small" style="padding:4px 2px 10px">No training logged this day.</div>`;
+
+  const mDone = morningDone(j), eDone = eveningDone(j);
+  const mStatus = mDone
+    ? [j.sleepMin != null ? fmtSleepMin(j.sleepMin) : null, j.sleepDiff ? `Sleep ${j.sleepDiff}/5` : null, j.bw != null ? fmtBw(j.bw) : null, j.rhr != null ? `RHR ${j.rhr}` : null].filter(Boolean).join(' · ') || 'Logged'
+    : 'Not logged';
+  const eStatus = eDone
+    ? [j.drinks != null ? `${j.drinks} drink${j.drinks === 1 ? '' : 's'}` : null, j.caffeine != null ? `${j.caffeine} caffeine` : null, j.stress ? `stress ${j.stress}/5` : null].filter(Boolean).join(' · ') || 'Logged'
+    : 'Not logged';
+  const noteLine = j && (j.notes || j.amNote)
+    ? `<div class="small muted" style="margin-top:8px">“${esc(j.notes || j.amNote)}”</div>` : '';
+
+  const protein = s.proteinLog[date];
+  const target = proteinTarget();
+
+  viewEl.innerHTML = detailBackBar(backLabel) + h`
+    <div class="section-label" style="margin-top:8px">Training</div>
+    ${sessionsHTML}
+    <div class="btn-row mb">
+      <button class="btn btn--sm" data-add="strength">＋ Lift</button>
+      <button class="btn btn--sm" data-add="zone2">＋ Zone 2</button>
+      <button class="btn btn--sm" data-add="interval">＋ Intervals</button>
+      <button class="btn btn--sm" data-add="activity">＋ Activity</button>
+    </div>
+
+    <div class="section-label">Check-ins</div>
+    <div class="card">
+      <div class="checkin-row" style="border-top:0">
+        <span class="checkin-row__ico">🌅</span>
+        <div class="checkin-row__body"><div class="checkin-row__t">Morning ${mDone ? '<span class="checkin-tick">✓</span>' : ''}</div><div class="small muted">${esc(mStatus)}</div></div>
+        <button class="btn btn--sm ${mDone ? 'btn--ghost' : ''}" data-checkin="morning">${mDone ? 'Edit' : 'Log'}</button>
+      </div>
+      <div class="checkin-row">
+        <span class="checkin-row__ico">🌙</span>
+        <div class="checkin-row__body"><div class="checkin-row__t">Evening ${eDone ? '<span class="checkin-tick">✓</span>' : ''}</div><div class="small muted">${esc(eStatus)}</div></div>
+        <button class="btn btn--sm ${eDone ? 'btn--ghost' : ''}" data-checkin="evening">${eDone ? 'Edit' : 'Log'}</button>
+      </div>
+      ${noteLine}
+    </div>
+
+    <div class="section-label">Nutrition</div>
+    <div class="card">
+      <div class="row-between">
+        <div><b>🍗 Protein</b>
+          <div class="small muted">${protein != null ? `${protein} g of ${target} g target` : 'Not logged'}</div></div>
+        <button class="btn btn--sm ${protein != null ? 'btn--ghost' : ''}" id="dayProtein">${protein != null ? 'Edit' : 'Log'}</button>
+      </div>
+    </div>
+  `;
+
+  viewEl.querySelector('[data-back]').addEventListener('click', () => { dayDetail = null; render(); window.scrollTo(0, 0); });
+  viewEl.querySelectorAll('[data-session]').forEach((el) => el.addEventListener('click', () => sessionDetail(el.dataset.session)));
+  viewEl.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click', () => startDraft(b.dataset.add, date)));
+  viewEl.querySelectorAll('[data-checkin]').forEach((b) => b.addEventListener('click', () => openCheckin(date, b.dataset.checkin)));
+  document.getElementById('dayProtein').addEventListener('click', () => proteinPrompt(date));
 }
 
 function journalHistoryItem(date, j) {
@@ -1947,7 +2143,7 @@ function sessionDetail(id) {
       st.sessions = st.sessions.filter((x) => x.id !== id);
       st.deleted[id] = new Date().toISOString(); // tombstone so sync propagates the deletion
     });
-    closeModal(); renderHistory();
+    closeModal(); render();
     toastAction('Session deleted', 'Undo', () => {
       update((st) => {
         st.sessions.push(removed);
@@ -1955,7 +2151,7 @@ function sessionDetail(id) {
         delete st.deleted[id];
         removed.updatedAt = new Date().toISOString(); // outlive the tombstone on other devices
       });
-      if (currentTab === 'history') renderHistory(); else render();
+      render();
       toast('Restored');
     });
   });
@@ -1984,7 +2180,7 @@ function editSession(s) {
     draft = { kind: 'activity', editId: s.id, activity: s.activity, date: s.date, durationMin: s.durationMin, note: s.note || '' };
   } else return;
   workout = null;
-  setTab('log');
+  enterLog();
 }
 
 // ================= SETUP =================
@@ -2143,7 +2339,7 @@ function renderSetup() {
     openModal('Reset all data?', `<p class="muted">This deletes every logged session and restores default exercises. Export a backup first if unsure.</p>
       <div class="btn-row mt"><button class="btn btn--ghost" data-close-btn>Cancel</button><button class="btn btn--danger" id="confReset">Reset</button></div>`);
     modalRoot.querySelector('[data-close-btn]').addEventListener('click', closeModal);
-    document.getElementById('confReset').addEventListener('click', () => { resetAll(); closeModal(); toast('Reset'); setTab('week'); });
+    document.getElementById('confReset').addEventListener('click', () => { resetAll(); closeModal(); toast('Reset'); setTab('today'); });
   });
 }
 
@@ -2347,7 +2543,7 @@ function doImport() {
     const file = inp.files[0]; if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      try { importJSON(reader.result); toast('Imported'); setTab('week'); }
+      try { importJSON(reader.result); toast('Imported'); setTab('today'); }
       catch (err) { toast('Invalid backup file'); }
     };
     reader.readAsText(file);
@@ -2356,7 +2552,7 @@ function doImport() {
 }
 
 // ---------- boot ----------
-setTab('week');
+setTab('today');
 
 // If previously connected, pull-or-push on startup.
 if (store.getConnected() && sync.isConfigured()) {

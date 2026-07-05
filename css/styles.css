@@ -68,11 +68,18 @@ body {
   backdrop-filter: blur(8px);
 }
 .app-header__inner {
-  display: flex; align-items: baseline; justify-content: space-between;
-  padding: 14px var(--pad) 10px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px var(--pad) 8px;
 }
 .app-header h1 { font-size: 1.35rem; margin: 0; letter-spacing: -0.02em; }
+.app-header__right { display: flex; align-items: center; gap: 10px; }
 .app-header__meta { color: var(--muted); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.iconbtn {
+  appearance: none; border: 1px solid var(--line); background: var(--card);
+  color: var(--muted); width: 34px; height: 34px; border-radius: 50%;
+  font-size: 1.05rem; line-height: 1; cursor: pointer; display: grid; place-items: center;
+}
+.iconbtn:active { transform: scale(.94); }
 
 /* View */
 .view {
@@ -97,6 +104,17 @@ body {
 }
 .tab__icon { font-size: 1.3rem; line-height: 1; }
 .tab.is-active { color: var(--accent); }
+
+/* center ＋ (log) button — raised accent circle */
+.tab--log { padding: 0; justify-content: center; }
+.tab__plus {
+  width: 48px; height: 48px; margin-top: -16px; border-radius: 50%;
+  background: var(--accent); color: #fff; font-size: 1.7rem; line-height: 1;
+  display: grid; place-items: center;
+  box-shadow: 0 4px 14px -2px color-mix(in srgb, var(--accent) 55%, transparent);
+  transition: transform .08s;
+}
+.tab--log:active .tab__plus { transform: scale(.92); }
 
 /* Cards */
 .card {
@@ -444,6 +462,35 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 /* even two-up segmented toggle (Morning / Evening) */
 .seg--even { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; overflow: visible; }
 .seg--even .segbtn { text-align: center; padding: 9px 0; }
+.seg--3 { grid-template-columns: 1fr 1fr 1fr; }
+
+/* Today: tappable week strip (one dot per day) */
+.daydots { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.daydot {
+  appearance: none; border: 0; background: none; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 4px 0;
+  border-radius: var(--radius-sm);
+}
+.daydot:disabled { cursor: default; }
+.daydot__dot {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid transparent; transition: transform .08s;
+}
+.daydot:disabled .daydot__dot { border-color: var(--line); border-style: dashed; }
+.daydot.is-today .daydot__dot { border-color: var(--accent); border-style: solid; }
+.daydot:not(:disabled):active .daydot__dot { transform: scale(.9); }
+.daydot__l { font-size: 0.68rem; color: var(--muted); font-weight: 600; }
+.daydot.is-today .daydot__l { color: var(--accent); }
+
+/* History: tappable day headers (open the day view) */
+.dayhead {
+  appearance: none; border: 0; background: none; cursor: pointer; width: 100%;
+  display: flex; align-items: center; justify-content: space-between;
+  color: var(--muted); font-size: 0.74rem; text-transform: uppercase;
+  letter-spacing: .07em; font-weight: 600; padding: 22px 2px 8px; text-align: left;
+}
+.dayhead:active { color: var(--accent); }
+.dayhead__chev { font-size: 1rem; line-height: 1; text-transform: none; }
 
 /* daily check-in rows on the home dashboard */
 .checkin-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); }

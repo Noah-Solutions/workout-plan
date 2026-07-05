@@ -11,6 +11,30 @@ The plan is deliberately **flexible**: hit weekly *targets*, not a rigid calenda
 that — you log whatever you actually did (a lift, a ride, a climb, a skipped day) and it checks the
 week against the targets and **auto-adjusts your next session** based on how the last one went.
 
+## How the app is organized
+
+Five destinations, each answering one question:
+
+- **Today** (home) — *what should I do right now?* Readiness score, the next workout (one tap to
+  start), a daily checklist (morning check-in · evening check-in · protein), and a tappable
+  week strip. Action only — no wall of analytics.
+- **Plan** — *how is my week tracking?* The weekly-targets dashboard: rings, minimum viable week,
+  movement patterns, hard-set volume per muscle, and the progression queue.
+- **＋ (center button)** — *log something*, from anywhere. Opens a bottom sheet grouped into
+  **Train** (guided workout, free-form strength, Zone 2, intervals, other activity) and
+  **Check in** (morning / evening). If a workout or draft is in progress, ＋ resumes it.
+- **Progress** — *is it working?* Split into three segments: **Training** (volume, strength
+  trends, consistency heatmap), **Body** (bodyweight, waist, protein adherence) and **Recovery**
+  (readiness breakdown, sleep, resting HR, training load and the correlation insights).
+- **History** — *what did I do, and can I fix it?* A filterable timeline (All / Lifts / Cardio /
+  Check-ins). Tapping any date opens a **day view** with everything from that day — sessions,
+  both check-in halves and protein — each editable in place, plus quick-add buttons to backfill
+  a forgotten session onto that date.
+
+Setup (profile, targets, timer, exercise library, sync, exports) lives behind the **⚙ gear** in
+the header. Editing flows return you to wherever you started them — fix a session from a day view
+and you land back on that day view.
+
 ## Features
 
 - **Daily readiness score** — a 0–100 home-screen tile averaging whatever recovery signals you've
@@ -22,7 +46,7 @@ week against the targets and **auto-adjusts your next session** based on how the
 - **Consistency at a glance** — a GitHub-style **12-week training heatmap** on Progress (lift /
   cardio / both per day) and a **check-in streak** counter on the home card, because gap-spotting
   is the cheapest motivation there is.
-- **This Week dashboard** — live progress toward the plan's weekly targets:
+- **Plan dashboard** — live progress toward the plan's weekly targets:
   - Zone 2 minutes (target ~120–150/wk), one interval session, each movement pattern hit ~2×.
   - **Hard-set volume per muscle** (a set counts when RIR ≤ 3), with a maintenance-floor marker
     (default 4 sets) and a growth target (default 10 sets).
@@ -30,11 +54,11 @@ week against the targets and **auto-adjusts your next session** based on how the
   - **Progression queue** — exercises ready to move up, computed from your logs.
   - **Protein** target (g/kg × bodyweight) with a daily quick-logger (+10/20/30/40 g per meal, or
     set the day's total).
-- **Progress charts** — a dedicated tab that turns your log into trends: per-lift **estimated 1RM**
-  over time (line), **weekly training volume** and **weekly cardio minutes** (Zone 2 vs intervals)
-  as bars, **bodyweight**, **waist** and **sleep-difficulty** trends, plus headline tiles for this
-  week's volume, best e1RM, and week streak. Charts are hand-rolled SVG — no libraries, fully
-  offline, and theme-aware.
+- **Progress charts** — a dedicated tab, split into **Training / Body / Recovery** segments, that
+  turns your log into trends: per-lift **estimated 1RM** over time (line), **weekly training
+  volume** and **weekly cardio minutes** (Zone 2 vs intervals) as bars, **bodyweight**, **waist**
+  and **sleep-difficulty** trends, plus headline tiles for this week's volume, best e1RM, and week
+  streak. Charts are hand-rolled SVG — no libraries, fully offline, and theme-aware.
 - **Daily check-ins (recovery journal)** — split into two moments that share one daily record:
   a **🌅 morning** check-in for last night's sleep (**bed & wake times** with auto-computed
   duration, **sleep difficulty** 1 easy – 5 hard), the **morning weigh-in**, **resting heart
@@ -48,7 +72,7 @@ week against the targets and **auto-adjusts your next session** based on how the
 - **Exercise detail** — tap any lift (from Progress or a History session) to drill into its own
   page: estimated-1RM trend, working-weight trend, per-session volume, best-ever tiles, the next
   auto-progression target, and a full session-by-session log.
-- **Recovery view (Fitbit-ready)** — a drill-down with the full readiness breakdown and sleep
+- **Recovery view (Fitbit-ready)** — Progress → Recovery, with the full readiness breakdown and sleep
   difficulty, **sleep duration** and **resting heart rate** charts (RHR annotated with your 28-day
   baseline), alcohol totals, plus a set of conservative, directional insights: **training load
   (acute:chronic workload ratio)** to flag load spikes and detraining dips, **sleep vs training**
@@ -71,10 +95,13 @@ week against the targets and **auto-adjusts your next session** based on how the
   also stored as an approximate per-set **RIR** so guided sessions keep an effort signal. Sessions
   record **start/finish timestamps** and every **planned set** (missed sets are kept as 0-rep rows),
   so compliance and time-of-day effects are analyzable later.
-- **Editable history** — any saved session can be **edited** (fix a typo'd weight, wrong duration)
-  or deleted from History, and deletions offer a 6-second **Undo** (safe even if the deletion
-  already synced — restores outlive their tombstone). Historical entries keep a snapshot of the
-  exercise (name, muscles, pattern, unit) taken at save time, so renaming or re-tagging an
+- **Editable history & day view** — any saved session can be **edited** (fix a typo'd weight,
+  wrong duration) or deleted from History, and deletions offer a 6-second **Undo** (safe even if
+  the deletion already synced — restores outlive their tombstone). Tapping a date opens a **day
+  view** where everything from that day is fixable in one place: sessions, the morning and evening
+  check-in halves, and **protein for any past date** — plus quick-add buttons to backfill a
+  forgotten lift, cardio session or activity onto that day. Historical entries keep a snapshot of
+  the exercise (name, muscles, pattern, unit) taken at save time, so renaming or re-tagging an
   exercise never rewrites past weeks' stats. Corrections don't touch your current progression
   targets.
 - **Auto-progression & deload** — on success the next target goes up automatically (+5 lb upper,
