@@ -625,7 +625,7 @@ function renderWorkout() {
       const tr = st.target != null ? st.target : w.targetReps;
       const dot = h`<button class="setdot ${st.done ? 'is-done' : ''} ${st.done && st.reps < tr ? 'is-miss' : ''}"
         data-set="${wi}:${si}">${st.done ? st.reps : (w.unit === 'sec' ? '⏱' : tr)}</button>`;
-      return isBar ? h`<div class="setcol">${dot}<span class="setcol__wt ${si === w.sets.length - 1 ? 'is-top' : ''}">${st.weight}</span></div>` : dot;
+      return ramps ? h`<div class="setcol">${dot}<span class="setcol__wt ${si === w.sets.length - 1 ? 'is-top' : ''}">${st.weight}</span></div>` : dot;
     }).join('');
     const allDone = w.sets.every((s) => s.done);
     const diffSel = ['easy', 'good', 'hard', 'failed'].map((d) => h`<button class="diffbtn ${w.difficulty === d ? 'is-sel diff--' + d : ''}" data-diff="${wi}:${d}">${diffLabel(d)}</button>`).join('');
@@ -2282,6 +2282,8 @@ function renderSetup() {
         <label class="field"><span>Rest timer (sec)</span><input type="number" id="wRest" value="${s.settings.restTimer.seconds}" /></label>
       </div>
       <label class="field" style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <input type="checkbox" id="wPyramid" ${s.settings.pyramidWorkSets ? 'checked' : ''} style="width:auto"> <span style="margin:0">Pyramid work sets (ramp up to a top set instead of straight sets)</span></label>
+      <label class="field" style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
         <input type="checkbox" id="wTimerOn" ${s.settings.restTimer.enabled ? 'checked' : ''} style="width:auto"> <span style="margin:0">Auto-start rest timer after each set</span></label>
       <label class="field" style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
         <input type="checkbox" id="wSound" ${s.settings.restTimer.sound ? 'checked' : ''} style="width:auto"> <span style="margin:0">Beep when rest is over</span></label>
@@ -2351,6 +2353,7 @@ function renderSetup() {
       st.settings.targets.intervalSessionsWeek = Number(document.getElementById('tInt').value) || t.intervalSessionsWeek;
       st.settings.barWeightLb = Number(document.getElementById('wBar').value) || st.settings.barWeightLb;
       st.settings.restTimer.seconds = Number(document.getElementById('wRest').value) || st.settings.restTimer.seconds;
+      st.settings.pyramidWorkSets = document.getElementById('wPyramid').checked;
       st.settings.restTimer.enabled = document.getElementById('wTimerOn').checked;
       st.settings.restTimer.sound = document.getElementById('wSound').checked;
       st.settings.restTimer.vibrate = document.getElementById('wVibe').checked;

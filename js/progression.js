@@ -133,19 +133,23 @@ export function guidedTarget(ex) {
   };
 }
 
-// Per-set weight/rep pyramid ramping up to the top set (= targetWeight).
-// Modeled on how established programs ramp:
+// Per-set weight/rep plan for a guided exercise. Default is STRAIGHT sets
+// (every work set at the target weight, 5x5-style); flip on the
+// "pyramid work sets" setting to ramp to a top set instead, modeled on how
+// established programs ramp:
 //   - fixed-rep strength lifts (e.g. 5x5) use Madcow 5x5's scheme: equal 12.5%
 //     jumps ending at the top set (5 sets -> 50/62.5/75/87.5/100%),
 //   - wide-rep-range accessories use a classic ascending pyramid: 10% jumps
 //     with reps sliding from the top of the range down to the bottom
 //     (e.g. 8-12 over 3 sets -> 80%x12 / 90%x10 / 100%x8).
-// Bodyweight, timed, and single-set lifts stay flat (the warm-up ramp covers those).
+// Bodyweight, timed, and single-set lifts always stay flat (the warm-up ramp
+// covers those). Either way progression moves the same number: the top set.
 export function pyramidSets(ex, topWeight) {
   const t = guidedTarget(ex);
   const n = t.sets;
   const top = topWeight != null ? topWeight : t.weight;
   const flat = () => Array.from({ length: n }, () => ({ weight: top, reps: t.reps }));
+  if (!get().settings.pyramidWorkSets) return flat();
   if (ex.unit === 'bw' || ex.unit === 'sec' || n <= 1 || !top) return flat();
 
   const [lo, hi] = ex.repRange || [t.reps, t.reps];

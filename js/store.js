@@ -29,13 +29,13 @@ function seedExercises() {
   });
   return [
     e('Back Squat', 'squat', ['Quads', 'Glutes'], [5, 5], 2, 115, 'lb', 5, 10),
-    e('Bench Press', 'push', ['Chest', 'Triceps', 'Shoulders'], [5, 5], 2, 95, 'lb', 5, 5),
-    e('Barbell Row', 'pull', ['Back', 'Biceps'], [5, 5], 2, 90, 'lb', 5, 5),
-    e('Romanian Deadlift', 'hinge', ['Hamstrings', 'Glutes'], [5, 5], 2, 155, 'lb', 5, 10),
-    e('Overhead Press', 'push', ['Shoulders', 'Triceps'], [5, 5], 2, 75, 'lb', 5, 5),
+    e('Bench Press', 'push', ['Chest', 'Triceps', 'Shoulders'], [5, 5], 2, 105, 'lb', 5, 5),
+    e('Barbell Row', 'pull', ['Back', 'Biceps'], [5, 5], 2, 95, 'lb', 5, 5),
+    e('Romanian Deadlift', 'hinge', ['Hamstrings', 'Glutes'], [5, 5], 2, 165, 'lb', 5, 10),
+    e('Overhead Press', 'push', ['Shoulders', 'Triceps'], [5, 5], 2, 80, 'lb', 5, 5),
     e('Deadlift', 'hinge', ['Hamstrings', 'Glutes', 'Back'], [5, 5], 2, 185, 'lb', 1, 10),
     e('Pull-up', 'pull', ['Back', 'Biceps'], [6, 10], 1, 0, 'bw', 3, 0),
-    e('Barbell Curl', 'pull', ['Biceps'], [8, 12], 1, 45, 'lb', 3, 5),
+    e('Barbell Curl', 'pull', ['Biceps'], [8, 12], 1, 30, 'lb', 3, 5),
     e('Triceps Pushdown', 'push', ['Triceps'], [10, 15], 1, 30, 'lb', 3, 5),
     e('Leg Curl', 'hinge', ['Hamstrings'], [10, 15], 1, 50, 'lb', 3, 5),
     e('Plank', 'core', ['Core'], [30, 60], 2, 0, 'sec', 3, 5),
@@ -45,6 +45,37 @@ function seedExercises() {
 }
 
 function nowISO() { return new Date().toISOString(); }
+
+// One-time seed-weight recalibration: the original defaults didn't match the
+// user's actual working weights. Maps exercise name -> [old seed, new seed];
+// applied in load() only to lifts that were never logged and still sit at the
+// old default, so it can never overwrite real training progress.
+const SEED_RECAL = {
+  'Bench Press': [95, 105],
+  'Barbell Row': [90, 95],
+  'Romanian Deadlift': [155, 165],
+  'Overhead Press': [75, 80],
+  'Barbell Curl': [45, 30],
+};
+
+function recalibrateSeedWeights(s) {
+  if (s.seedRecalV2) return false;
+  s.seedRecalV2 = true;
+  const logged = new Set();
+  (s.sessions || []).forEach((sess) => (sess.entries || []).forEach((en) => logged.add(en.exerciseId)));
+  let changed = false;
+  (s.exercises || []).forEach((ex) => {
+    const r = SEED_RECAL[ex.name];
+    if (!r || ex.custom || logged.has(ex.id)) return;
+    const [oldW, newW] = r;
+    if (ex.targetWeight !== oldW || ex.lastWeight !== oldW) return; // user already adjusted it
+    ex.targetWeight = ex.lastWeight = newW;
+    ex.bestWeight = newW; // old best was just the seed, never actually lifted
+    ex._u = nowISO();     // per-record stamp so the bump propagates via merge sync
+    changed = true;
+  });
+  return changed;
+}
 
 function defaults() {
   return {
@@ -60,6 +91,7 @@ function defaults() {
       maxHR: 190,
       barWeightLb: 45,                       // Olympic barbell
       platesLb: [45, 35, 25, 10, 5, 2.5],    // plates available per side (lbs)
+      pyramidWorkSets: false,                // false = straight sets (5x5-style); true = ramp to a top set
       restTimer: { enabled: true, seconds: 90, sound: true, vibrate: true },
       targets: {
         setsPerMuscle: 10,     // growth target per muscle / week
@@ -124,6 +156,13 @@ export function load() {
       // data -> treat as current). A present-but-empty '' means a fresh, unmodified
       // install and must stay empty so it loses last-write-wins to server data.
       if (state.updatedAt === undefined) state.updatedAt = nowISO();
+      if (recalibrateSeedWeights(state) && state.updatedAt) {
+        // count as a real local change so the new targets sync out; skipped on a
+        // never-modified install, which must keep losing last-write-wins.
+        state.rev = (state.rev || 0) + 1;
+        state.updatedAt = nowISO();
+      }
+      save(true);
     } else {
       state = defaults();
       save(true);
