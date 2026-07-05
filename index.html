@@ -17,28 +17,31 @@
   <div id="app">
     <header class="app-header">
       <div class="app-header__inner">
-        <h1 id="viewTitle">This Week</h1>
-        <div class="app-header__meta" id="weekLabel"></div>
+        <h1 id="viewTitle">Today</h1>
+        <div class="app-header__right">
+          <div class="app-header__meta" id="weekLabel"></div>
+          <button class="iconbtn" id="setupBtn" aria-label="Setup">⚙</button>
+        </div>
       </div>
     </header>
 
     <main id="view" class="view"></main>
 
     <nav class="tabbar" role="navigation" aria-label="Main">
-      <button class="tab is-active" data-tab="week" aria-label="Week">
-        <span class="tab__icon">◎</span><span class="tab__label">Week</span>
+      <button class="tab is-active" data-tab="today" aria-label="Today">
+        <span class="tab__icon">◎</span><span class="tab__label">Today</span>
       </button>
-      <button class="tab" data-tab="log" aria-label="Log">
-        <span class="tab__icon">＋</span><span class="tab__label">Log</span>
+      <button class="tab" data-tab="plan" aria-label="Plan">
+        <span class="tab__icon">▤</span><span class="tab__label">Plan</span>
+      </button>
+      <button class="tab tab--log" id="logBtn" aria-label="Log">
+        <span class="tab__plus">＋</span>
       </button>
       <button class="tab" data-tab="progress" aria-label="Progress">
         <span class="tab__icon">◔</span><span class="tab__label">Progress</span>
       </button>
       <button class="tab" data-tab="history" aria-label="History">
         <span class="tab__icon">≡</span><span class="tab__label">History</span>
-      </button>
-      <button class="tab" data-tab="setup" aria-label="Setup">
-        <span class="tab__icon">⚙</span><span class="tab__label">Setup</span>
       </button>
     </nav>
   </div>
