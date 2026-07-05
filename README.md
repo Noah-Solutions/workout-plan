@@ -1,5 +1,5 @@
 # Concurrent Trainer
-
+ 
 A flexible, mobile-first training tracker built from an evidence-based concurrent-training plan
 (lifting + Zone 2 + intervals for general health & body composition). It runs entirely in your
 browser — **no account, no backend, works offline** — and installs to your phone's home screen as
