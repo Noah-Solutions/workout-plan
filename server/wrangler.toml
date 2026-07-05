@@ -1,0 +1,15 @@
+# Cloudflare Worker config for the Concurrent Trainer sync backend.
+# See server/README.md for the full deploy walkthrough.
+name = "trainer-sync"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# KV namespace for storage. Create it with:
+#   wrangler kv namespace create TRAINER_KV
+# then paste the returned id below (replace REPLACE_WITH_YOUR_KV_ID).
+[[kv_namespaces]]
+binding = "TRAINER_KV"
+id = "REPLACE_WITH_YOUR_KV_ID"
+
+# SYNC_TOKEN is NOT stored here — it's a secret set with:
+#   wrangler secret put SYNC_TOKEN

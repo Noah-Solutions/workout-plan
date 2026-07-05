@@ -40,7 +40,9 @@ function defaults() {
   return {
     version: 1,
     rev: 0,                 // bumped on every local mutation
-    updatedAt: nowISO(),    // wall-clock of last local mutation (last-write-wins key)
+    updatedAt: '',          // empty = never modified locally, so a fresh install never
+                            // wins last-write-wins over real server data on first connect.
+                            // Set to now on the first real mutation (see update()).
     settings: {
       bodyweightKg: 80,
       units: 'lb',
@@ -76,7 +78,10 @@ export function load() {
       state.exercises = state.exercises || d.exercises;
       state.sessions = state.sessions || [];
       if (state.rev == null) state.rev = 0;
-      if (!state.updatedAt) state.updatedAt = nowISO();
+      // Backfill ONLY for pre-schema states missing the key entirely (they have real
+      // data -> treat as current). A present-but-empty '' means a fresh, unmodified
+      // install and must stay empty so it loses last-write-wins to server data.
+      if (state.updatedAt === undefined) state.updatedAt = nowISO();
     } else {
       state = defaults();
       save(true);
@@ -131,11 +136,14 @@ export function applyRemote(remote) {
   save(true);
 }
 
-// Google Client ID + connection flag live OUTSIDE synced state (never pushed to the sheet).
-const GKEY = 'ct_google_clientid';
-const CKEY = 'ct_google_connected';
-export function getClientId() { return localStorage.getItem(GKEY) || ''; }
-export function setClientId(id) { localStorage.setItem(GKEY, (id || '').trim()); }
+// Sync server config + connection flag live OUTSIDE synced state (never pushed to the server).
+const UKEY = 'ct_server_url';
+const TKEY = 'ct_sync_token';
+const CKEY = 'ct_sync_connected';
+export function getServerUrl() { return localStorage.getItem(UKEY) || ''; }
+export function setServerUrl(v) { localStorage.setItem(UKEY, (v || '').trim()); }
+export function getToken() { return localStorage.getItem(TKEY) || ''; }
+export function setToken(v) { localStorage.setItem(TKEY, (v || '').trim()); }
 export function getConnected() { return localStorage.getItem(CKEY) === '1'; }
 export function setConnected(v) { localStorage.setItem(CKEY, v ? '1' : '0'); }
 
