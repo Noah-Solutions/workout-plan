@@ -22,8 +22,16 @@ week against the targets and **auto-adjusts your next session** based on how the
   - **Protein** target (g/kg × bodyweight) with a daily quick-logger.
 - **Progress charts** — a dedicated tab that turns your log into trends: per-lift **estimated 1RM**
   over time (line), **weekly training volume** and **weekly cardio minutes** (Zone 2 vs intervals)
-  as bars, plus headline tiles for this week's volume, best e1RM, and week streak. Charts are
-  hand-rolled SVG — no libraries, fully offline, and theme-aware.
+  as bars, a **bodyweight** trend, and a **sleep-difficulty** trend, plus headline tiles for this
+  week's volume, best e1RM, and week streak. Charts are hand-rolled SVG — no libraries, fully
+  offline, and theme-aware.
+- **Daily check-in (recovery journal)** — a quick per-day log for **bodyweight**, **sleep
+  difficulty** (1 easy – 5 hard), **alcohol drinks**, optional **energy / soreness / stress**
+  ratings, **pre-sleep activity**, and free-form notes. One tap from the home screen or the Log
+  menu, editable from History, and surfaced as trends on Progress — so you can correlate recovery
+  with how your training actually goes.
+- **Data export** — a full **JSON** backup, plus **CSV** exports (one row per set/session, one row
+  per check-in) that drop straight into a spreadsheet to slice and refine your program.
 - **Guided workout (StrongLifts-style)** — a "Start workout" flow that shows your exact **target
   weight** for every lift, a **plate breakdown** per side, and tap-to-complete **set circles** (tap
   again if you missed reps). A built-in **rest timer** auto-starts after each set with a beep/vibrate

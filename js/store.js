@@ -72,6 +72,10 @@ function defaults() {
     exercises: seedExercises(),
     sessions: [],           // logged workouts
     proteinLog: {},         // 'YYYY-MM-DD' -> grams
+    // daily recovery check-in. 'YYYY-MM-DD' -> {
+    //   bw (bodyweight, kg), sleepDiff (1-5, 1=easy 5=hard), drinks (alcohol count),
+    //   energy/soreness/stress (1-5, optional), preSleep (text), notes (text) }
+    journal: {},
   };
 }
 
@@ -91,6 +95,7 @@ export function load() {
       if (!state.settings.platesLb) state.settings.platesLb = d.settings.platesLb;
       if (state.settings.barWeightLb == null) state.settings.barWeightLb = d.settings.barWeightLb;
       state.proteinLog = state.proteinLog || {};
+      state.journal = state.journal || {};
       state.exercises = state.exercises || d.exercises;
       state.sessions = state.sessions || [];
       // backfill new per-exercise guided-workout fields
@@ -150,6 +155,7 @@ export function applyRemote(remote) {
   if (Array.isArray(remote.sessions)) s.sessions = remote.sessions;
   if (Array.isArray(remote.exercises)) s.exercises = remote.exercises;
   if (remote.proteinLog && typeof remote.proteinLog === 'object') s.proteinLog = remote.proteinLog;
+  if (remote.journal && typeof remote.journal === 'object') s.journal = remote.journal;
   if (remote.settings && typeof remote.settings === 'object') {
     const d = defaults();
     s.settings = Object.assign({}, d.settings, remote.settings);
@@ -185,6 +191,7 @@ export function importJSON(text) {
   state.settings = Object.assign({}, d.settings, state.settings);
   state.settings.targets = Object.assign({}, d.settings.targets, state.settings.targets || {});
   state.proteinLog = state.proteinLog || {};
+  state.journal = state.journal || {};
   save();
   return state;
 }
