@@ -52,7 +52,12 @@ Tap **Connect**. The app pulls on connect and auto-pushes (debounced) on every c
   (then update it in the app).
 - **Last-write-wins.** The server just stores the latest blob; the app decides push vs pull by
   comparing timestamps. Editing on two devices simultaneously can overwrite one side.
-- **CORS is open (`*`)** because access is token-gated and uses no cookies. Fine for personal use.
+- **CORS is locked to your app's origin** (defense-in-depth on top of the token). The worker only
+  returns an `Access-Control-Allow-Origin` header for allowlisted origins — by default your GitHub
+  Pages site plus `localhost` for dev. A stolen token therefore can't be used from another website
+  in your browser. To change the allowlist without editing code, set the `ALLOWED_ORIGINS` var
+  (comma-separated) in `wrangler.toml` and redeploy. (Non-browser clients like `curl` send no
+  `Origin` and are unaffected — the token is still the real gate there.)
 - **Free limits** are far beyond one person: KV free tier is ~100k reads + 1k writes/day.
 - **Local test:** `wrangler dev` runs it at `http://localhost:8787` (use that URL + your token in the
   app while testing locally).

@@ -13,3 +13,9 @@ id = "c18e45950644416a84c1a41aa7809828"
 
 # SYNC_TOKEN is NOT stored here — it's a secret set with:
 #   wrangler secret put SYNC_TOKEN
+
+# CORS allowlist (defense-in-depth on top of the token). Optional: the worker
+# already defaults to your GitHub Pages origin + localhost. Uncomment and edit
+# to override (comma-separated) if you serve the app from a different origin.
+# [vars]
+# ALLOWED_ORIGINS = "https://noah-solutions.github.io,http://localhost:8000"
