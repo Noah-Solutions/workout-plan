@@ -30,6 +30,14 @@ week against the targets and **auto-adjusts your next session** based on how the
   ratings, **pre-sleep activity**, and free-form notes. One tap from the home screen or the Log
   menu, editable from History, and surfaced as trends on Progress — so you can correlate recovery
   with how your training actually goes.
+- **Exercise detail** — tap any lift (from Progress or a History session) to drill into its own
+  page: estimated-1RM trend, working-weight trend, per-session volume, best-ever tiles, the next
+  auto-progression target, and a full session-by-session log.
+- **Recovery view (Fitbit-ready)** — a drill-down that blends your check-in data into sleep, alcohol
+  and readiness trends and a directional **sleep-vs-training** comparison (volume after easy vs. hard
+  sleep). Recovery reads through a source-agnostic layer (`js/recovery.js`): today it uses your
+  self-reports; when a **Fitbit** is connected later it will prefer measured sleep stages, resting
+  heart rate and HRV — no view changes needed.
 - **Data export** — a full **JSON** backup, plus **CSV** exports (one row per set/session, one row
   per check-in) that drop straight into a spreadsheet to slice and refine your program.
 - **Guided workout (StrongLifts-style)** — a "Start workout" flow that shows your exact **target
@@ -141,6 +149,7 @@ js/week.js            date helpers + weekly aggregation vs targets
 js/progression.js     auto-progression + deload + difficulty (guided workout)
 js/plates.js          barbell plate calculator (lbs)
 js/charts.js          dependency-free SVG line/bar charts (Progress tab)
+js/recovery.js        source-agnostic recovery signal (journal now, Fitbit later)
 js/timer.js           rest timer (beep + vibrate)
 js/templates.js       starter session templates
 js/sync.js            two-way sync client (REST, bearer-token)

@@ -76,6 +76,10 @@ function defaults() {
     //   bw (bodyweight, kg), sleepDiff (1-5, 1=easy 5=hard), drinks (alcohol count),
     //   energy/soreness/stress (1-5, optional), preSleep (text), notes (text) }
     journal: {},
+    // device-measured recovery (future Fitbit sync). 'YYYY-MM-DD' -> {
+    //   sleepMinutes, sleepScore (0-100), restingHR, hrv, ... }. Empty until a
+    //   sync layer populates it; recovery.js already prefers it over self-reports.
+    fitbit: {},
   };
 }
 
@@ -96,6 +100,7 @@ export function load() {
       if (state.settings.barWeightLb == null) state.settings.barWeightLb = d.settings.barWeightLb;
       state.proteinLog = state.proteinLog || {};
       state.journal = state.journal || {};
+      state.fitbit = state.fitbit || {};
       state.exercises = state.exercises || d.exercises;
       state.sessions = state.sessions || [];
       // backfill new per-exercise guided-workout fields
@@ -156,6 +161,7 @@ export function applyRemote(remote) {
   if (Array.isArray(remote.exercises)) s.exercises = remote.exercises;
   if (remote.proteinLog && typeof remote.proteinLog === 'object') s.proteinLog = remote.proteinLog;
   if (remote.journal && typeof remote.journal === 'object') s.journal = remote.journal;
+  if (remote.fitbit && typeof remote.fitbit === 'object') s.fitbit = remote.fitbit;
   if (remote.settings && typeof remote.settings === 'object') {
     const d = defaults();
     s.settings = Object.assign({}, d.settings, remote.settings);
@@ -192,6 +198,7 @@ export function importJSON(text) {
   state.settings.targets = Object.assign({}, d.settings.targets, state.settings.targets || {});
   state.proteinLog = state.proteinLog || {};
   state.journal = state.journal || {};
+  state.fitbit = state.fitbit || {};
   save();
   return state;
 }

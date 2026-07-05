@@ -11,6 +11,7 @@ import { suggestNext, commitExerciseState, fmtWeight, lastPerformance, guidedTar
 import { TEMPLATES } from './templates.js';
 import { platesLabel, platesFor } from './plates.js';
 import { lineChart, barChart, legend, mountTips } from './charts.js';
+import { dailyRecovery, difficultyToScore, hasDeviceData, recoveryDates } from './recovery.js';
 import * as store from './store.js';
 import * as sync from './sync.js';
 import * as timer from './timer.js';
@@ -40,6 +41,10 @@ let draft = null;
 let workout = null;
 // remembered exercise selection on the Progress tab
 let progressSel = null;
+// Progress sub-views (drill-downs). When set, the Progress tab renders a detail
+// screen instead of the charts overview.
+let exDetail = null;        // exercise id for the exercise-detail view
+let recoveryDetail = false; // recovery-detail view
 
 // ---------- helpers ----------
 const h = (strings, ...vals) => strings.reduce((a, s, i) => a + s + (vals[i] ?? ''), '');
@@ -106,12 +111,24 @@ function closeModal() { modalRoot.innerHTML = ''; }
 // ---------- router ----------
 const TITLES = { week: 'This Week', log: 'Log a Session', progress: 'Progress', history: 'History', setup: 'Setup' };
 function setTab(tab) {
+  // tapping a tab always lands on that tab's top level (clear any drill-down)
+  exDetail = null; recoveryDetail = false;
   currentTab = tab;
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === tab));
   titleEl.textContent = TITLES[tab];
   render();
   window.scrollTo(0, 0);
 }
+
+// Open a Progress drill-down without going through setTab (which would clear it).
+function gotoProgress() {
+  currentTab = 'progress';
+  document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === 'progress'));
+  render();
+  window.scrollTo(0, 0);
+}
+function openExerciseDetail(id) { exDetail = id; recoveryDetail = false; gotoProgress(); }
+function openRecoveryDetail() { recoveryDetail = true; exDetail = null; gotoProgress(); }
 document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => {
   if (b.dataset.tab === 'log' && !workout) { draft = null; }
   setTab(b.dataset.tab);
@@ -122,7 +139,11 @@ function render() {
   weekLabelEl.textContent = currentTab === 'week' ? fmtWeekLabel(range) : '';
   if (currentTab === 'week') renderWeek();
   else if (currentTab === 'log') renderLog();
-  else if (currentTab === 'progress') renderProgress();
+  else if (currentTab === 'progress') {
+    if (exDetail) renderExerciseDetail(exDetail);
+    else if (recoveryDetail) renderRecoveryDetail();
+    else renderProgress();
+  }
   else if (currentTab === 'history') renderHistory();
   else if (currentTab === 'setup') renderSetup();
 }
@@ -917,6 +938,7 @@ function lastNWeeks(n) {
 }
 
 function renderProgress() {
+  titleEl.textContent = 'Progress';
   const sessions = get().sessions;
   const strengthSessions = sessions.filter((s) => s.kind === 'strength');
 
@@ -996,6 +1018,7 @@ function renderProgress() {
       <div class="card__title"><h2>Strength trend</h2><span class="card__hint">${metricKind(o.ex)}</span></div>
       <div class="seg">${seg}</div>
       ${lineChart(pts, { yFmt: (v) => compact(v), valFmt: (v) => fmtMetric(o.ex, v), color: '--chart-1' })}
+      <div class="row-between mt"><span></span><button class="linkbtn" data-exdetail="${progressSel}">Full history →</button></div>
     </div>`;
   }
 
@@ -1047,11 +1070,13 @@ function renderProgress() {
       .map((d) => journal[d].sleepDiff);
     return vals.length ? { t: w.label, full: `Week of ${w.label}`, v: Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 } : null;
   }).filter(Boolean);
+  const anyRecovery = recoveryDates().length > 0;
   const recoveryCard = h`<div class="card">
-    <div class="card__title"><h2>Sleep difficulty</h2><span class="card__hint">weekly avg · 1 easy–5 hard</span></div>
+    <div class="card__title"><h2>Sleep &amp; recovery</h2><span class="card__hint">weekly avg · 1 easy–5 hard</span></div>
     ${sleepPts.length >= 2
       ? lineChart(sleepPts, { yFmt: (v) => String(v), valFmt: (v) => `${v}/5`, color: '--chart-1' })
       : '<div class="chart-empty">Log sleep difficulty on a few nights to see the trend.</div>'}
+    ${anyRecovery ? `<div class="row-between mt"><span></span><button class="linkbtn" data-recovery>Recovery details →</button></div>` : ''}
   </div>`;
 
   viewEl.innerHTML = stats + strengthCard + bwCard + volCard + cardioCard + recoveryCard;
@@ -1059,12 +1084,197 @@ function renderProgress() {
   viewEl.querySelectorAll('[data-ex]').forEach((b) => b.addEventListener('click', () => {
     progressSel = b.dataset.ex; renderProgress();
   }));
+  viewEl.querySelectorAll('[data-exdetail]').forEach((b) => b.addEventListener('click', () => openExerciseDetail(b.dataset.exdetail)));
+  const recBtn = viewEl.querySelector('[data-recovery]');
+  if (recBtn) recBtn.addEventListener('click', openRecoveryDetail);
   mountTips(viewEl);
 }
 
 // short date for chart x-axis, e.g. "Jul 5"
 function fmtShort(iso) {
   return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function detailBackBar(label) {
+  return h`<div class="wtop"><button class="linkbtn" data-back>← ${esc(label)}</button><span></span></div>`;
+}
+
+// ---- exercise detail (drill-down from Progress / History) ----
+function renderExerciseDetail(id) {
+  const ex = exerciseById(id);
+  if (!ex) { exDetail = null; return renderProgress(); }
+  titleEl.textContent = ex.name;
+
+  const weighted = ex.unit !== 'bw' && ex.unit !== 'sec';
+  const rows = [];
+  [...get().sessions].filter((s) => s.kind === 'strength').sort((a, b) => (a.date < b.date ? -1 : 1))
+    .forEach((s) => (s.entries || []).forEach((en) => {
+      if (en.exerciseId !== id) return;
+      const working = (en.sets || []).filter((st) => Number(st.reps) > 0);
+      if (!working.length) return;
+      const topW = weighted ? Math.max(...working.map((st) => Number(st.weight) || 0)) : Math.max(...working.map((st) => Number(st.reps)));
+      const vol = working.reduce((a, st) => a + (Number(st.weight) || 0) * (Number(st.reps) || 0), 0);
+      rows.push({ date: s.date, e1: exerciseMetric(ex, en.sets), topW, vol, sets: working, difficulty: en.difficulty });
+    }));
+
+  const meta = `${PATTERN_LABEL[ex.pattern] || ex.pattern} · ${ex.muscles.join(', ')}`;
+  if (!rows.length) {
+    viewEl.innerHTML = detailBackBar('Progress') + h`<div class="card">
+      <div class="ex-detail__name">${esc(ex.name)}</div><div class="ex-detail__meta">${esc(meta)}</div></div>
+      <div class="empty"><div class="empty__ico">📊</div>No logged sets for this lift yet.</div>`;
+    viewEl.querySelector('[data-back]').addEventListener('click', () => { exDetail = null; render(); });
+    return;
+  }
+
+  const bestE1 = Math.max(...rows.map((r) => r.e1));
+  const bestTop = Math.max(...rows.map((r) => r.topW));
+  const tgt = guidedTarget(ex);
+  const sug = suggestNext(ex);
+  const metricUnit = (v) => fmtMetric(ex, v);
+
+  const stats = h`<div class="statgrid">
+    <div class="stat"><div class="stat__val">${weighted ? compact(bestE1) : bestE1}</div><div class="stat__label">Best ${metricKind(ex)}</div><div class="stat__sub">${weighted ? esc(metricUnit(bestE1)) : (ex.unit === 'sec' ? 'seconds' : 'reps')}</div></div>
+    <div class="stat"><div class="stat__val">${weighted ? compact(bestTop) : bestTop}</div><div class="stat__label">Top set</div><div class="stat__sub">${weighted ? esc(fmtWeight(bestTop, ex.unit)) : (ex.unit === 'sec' ? 'seconds' : 'reps')}</div></div>
+    <div class="stat"><div class="stat__val">${rows.length}</div><div class="stat__label">Sessions</div><div class="stat__sub">${esc(fmtDate(rows[rows.length - 1].date))}</div></div>
+  </div>`;
+
+  const e1Pts = rows.map((r) => ({ t: fmtShort(r.date), full: fmtDate(r.date), v: r.e1 }));
+  const e1Card = rows.length >= 2 ? h`<div class="card">
+    <div class="card__title"><h2>${metricKind(ex) === 'e1RM' ? 'Estimated 1RM' : metricKind(ex) === 'reps' ? 'Top reps' : 'Top time'}</h2><span class="card__hint">${rows.length} sessions</span></div>
+    ${lineChart(e1Pts, { yFmt: (v) => compact(v), valFmt: metricUnit, color: '--chart-1' })}
+  </div>` : '';
+
+  let weightCard = '';
+  if (weighted && rows.length >= 2) {
+    const wPts = rows.map((r) => ({ t: fmtShort(r.date), full: fmtDate(r.date), v: r.topW }));
+    weightCard = h`<div class="card">
+      <div class="card__title"><h2>Working weight</h2><span class="card__hint">top set · ${ex.unit}</span></div>
+      ${lineChart(wPts, { yFmt: (v) => compact(v), valFmt: (v) => fmtWeight(v, ex.unit), color: '--chart-2' })}
+    </div>`;
+  }
+
+  let volCard = '';
+  if (weighted) {
+    const volGroups = rows.slice(-10).map((r) => ({ label: fmtShort(r.date), full: fmtDate(r.date), total: r.vol, segs: [{ key: 'v', v: r.vol }] }));
+    volCard = h`<div class="card">
+      <div class="card__title"><h2>Volume per session</h2><span class="card__hint">lb · last ${volGroups.length}</span></div>
+      ${barChart(volGroups, [{ key: 'v', name: 'Volume', color: '--chart-1' }], { yFmt: compact, valFmt: compact })}
+    </div>`;
+  }
+
+  const setStr = (r) => r.sets.map((st) => weighted ? `${st.weight}×${st.reps}` : ex.unit === 'sec' ? `${st.reps}s` : `${st.reps}`).join(', ');
+  const recent = rows.slice().reverse().slice(0, 12).map((r) => h`<div class="det-ex">
+    <div><div class="det-ex__name">${esc(fmtDate(r.date))}${r.difficulty ? ` <span class="tag">${diffLabel(r.difficulty)}</span>` : ''}</div>
+      <div class="small muted">${esc(setStr(r))}</div></div>
+    <div class="det-ex__sets">${weighted ? esc(metricUnit(r.e1)) : (ex.unit === 'sec' ? r.e1 + 's' : r.e1 + ' reps')}</div>
+  </div>`).join('');
+
+  viewEl.innerHTML = detailBackBar('Progress') + h`
+    <div class="card">
+      <div class="ex-detail__name">${esc(ex.name)}</div>
+      <div class="ex-detail__meta">${esc(meta)}</div>
+      <div class="ex-detail__next">Next session: <b>${esc(sug.text)}</b></div>
+    </div>
+    ${stats}
+    ${e1Card}${weightCard}${volCard}
+    <div class="card">
+      <div class="card__title"><h2>Recent sessions</h2><span class="card__hint">newest first</span></div>
+      ${recent}
+    </div>
+  `;
+  viewEl.querySelector('[data-back]').addEventListener('click', () => { exDetail = null; render(); });
+  mountTips(viewEl);
+}
+
+// ---- recovery detail (drill-down; Fitbit-ready) ----
+function renderRecoveryDetail() {
+  titleEl.textContent = 'Recovery';
+  const dates = recoveryDates();
+  const weeks8 = lastNWeeks(8);
+
+  // weekly averages from the normalized recovery signal
+  const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+  const weekAgg = weeks8.map((w) => {
+    const days = dates.filter((d) => d >= w.startISO && d <= w.endISO).map(dailyRecovery);
+    return {
+      w,
+      sleep: avg(days.map((d) => d.sleepDifficulty).filter((v) => v != null)),
+      drinks: days.map((d) => d.drinks).filter((v) => v != null).reduce((a, b) => a + b, 0),
+      energy: avg(days.map((d) => d.energy).filter((v) => v != null)),
+      soreness: avg(days.map((d) => d.soreness).filter((v) => v != null)),
+      stress: avg(days.map((d) => d.stress).filter((v) => v != null)),
+    };
+  });
+
+  const sleepPts = weekAgg.filter((x) => x.sleep != null).map((x) => ({ t: x.w.label, full: `Week of ${x.w.label}`, v: Math.round(x.sleep * 10) / 10 }));
+  const sleepCard = h`<div class="card">
+    <div class="card__title"><h2>Sleep difficulty</h2><span class="card__hint">weekly avg · 1 easy–5 hard</span></div>
+    ${sleepPts.length >= 2 ? lineChart(sleepPts, { yFmt: String, valFmt: (v) => `${v}/5`, color: '--chart-1' })
+      : '<div class="chart-empty">A few more nights of check-ins will fill this in.</div>'}
+  </div>`;
+
+  const drinkGroups = weekAgg.map((x) => ({ label: x.w.label, full: `Week of ${x.w.label}`, total: x.drinks, segs: [{ key: 'd', v: x.drinks }] }));
+  const drinkCard = h`<div class="card">
+    <div class="card__title"><h2>Alcohol</h2><span class="card__hint">drinks / week</span></div>
+    ${drinkGroups.some((g) => g.total > 0) ? barChart(drinkGroups, [{ key: 'd', name: 'Drinks', color: '--chart-2' }], { yFmt: String, valFmt: String })
+      : '<div class="chart-empty">No drinks logged yet.</div>'}
+  </div>`;
+
+  // readiness: latest values + short trend, when present
+  const latest = dates.length ? dailyRecovery(dates[dates.length - 1]) : null;
+  const readiness = latest && (latest.energy || latest.soreness || latest.stress) ? h`<div class="card">
+    <div class="card__title"><h2>Readiness</h2><span class="card__hint">latest · ${esc(fmtDate(latest.date))}</span></div>
+    <div class="rd-row"><span>Energy</span><b>${latest.energy ? latest.energy + '/5' : '—'}</b></div>
+    <div class="rd-row"><span>Soreness</span><b>${latest.soreness ? latest.soreness + '/5' : '—'}</b></div>
+    <div class="rd-row"><span>Stress</span><b>${latest.stress ? latest.stress + '/5' : '—'}</b></div>
+  </div>` : '';
+
+  // honest sleep -> performance signal: bucket lifting days by that morning's
+  // (previous night's) sleep, compare average session volume. Directional only.
+  const insight = sleepPerformanceInsight();
+
+  // Fitbit seam: prompt to connect until measured data lands.
+  const device = hasDeviceData() ? '' : h`<div class="card card--seam">
+    <div class="card__title"><h2>❤️ Heart rate &amp; sleep</h2><span class="card__hint">coming soon</span></div>
+    <p class="small muted">Connect a Fitbit to replace self-rated sleep with <b>measured sleep stages</b>, and add
+      <b>resting heart rate</b> and <b>HRV</b> as recovery inputs — for a complete picture of how training and
+      recovery interact. This view already blends whatever sources are available.</p>
+    <button class="btn btn--sm" id="fitbitSoon" disabled>Connect Fitbit (soon)</button>
+  </div>`;
+
+  viewEl.innerHTML = detailBackBar('Progress') + sleepCard + drinkCard + readiness + insight + device;
+  viewEl.querySelector('[data-back]').addEventListener('click', () => { recoveryDetail = false; render(); });
+  mountTips(viewEl);
+}
+
+// Compare average session volume on days after easy vs hard sleep. Returns a
+// card, or a "need more data" note. Deliberately conservative.
+function sleepPerformanceInsight() {
+  const lifts = get().sessions.filter((s) => s.kind === 'strength');
+  const good = [], poor = [];
+  lifts.forEach((s) => {
+    const rec = dailyRecovery(s.date);
+    const diff = rec.sleepDifficulty;
+    if (diff == null) return;
+    const vol = sessionVolume(s);
+    if (!vol) return;
+    if (diff <= 2) good.push(vol); else if (diff >= 4) poor.push(vol);
+  });
+  if (good.length < 2 || poor.length < 2) {
+    return h`<div class="card">
+      <div class="card__title"><h2>Sleep vs training</h2></div>
+      <p class="small muted">Log sleep on more lifting days and this will compare your training volume after good vs. poor sleep. So far: ${good.length} good-sleep, ${poor.length} poor-sleep sessions.</p>
+    </div>`;
+  }
+  const ag = Math.round(good.reduce((a, b) => a + b, 0) / good.length);
+  const ap = Math.round(poor.reduce((a, b) => a + b, 0) / poor.length);
+  const pct = ag ? Math.round(((ap - ag) / ag) * 100) : 0;
+  return h`<div class="card">
+    <div class="card__title"><h2>Sleep vs training</h2><span class="card__hint">avg session volume</span></div>
+    <div class="rd-row"><span>After easy sleep (≤2)</span><b>${compact(ag)} lb</b></div>
+    <div class="rd-row"><span>After hard sleep (≥4)</span><b>${compact(ap)} lb</b></div>
+    <p class="small muted mt">On hard-sleep days you train <b>${pct >= 0 ? '+' : ''}${pct}%</b> ${pct >= 0 ? 'more' : 'less'} volume, on average. Directional — more data sharpens it.</p>
+  </div>`;
 }
 
 // ================= HISTORY =================
@@ -1176,13 +1386,16 @@ function sessionDetail(id) {
   let body = '';
   if (s.kind === 'strength') {
     body = (s.entries || []).map((e) => {
-      const name = (exerciseById(e.exerciseId)?.name) || e.exSnapshot?.name || '?';
+      const live = exerciseById(e.exerciseId);
+      const name = live?.name || e.exSnapshot?.name || '?';
       const sets = (e.sets || []).map((st) => st.weight ? `${st.weight}×${st.reps}` : `${st.reps}${st.reps > 30 ? 's' : ''}`).join(', ');
       const diff = e.difficulty ? ` <span class="tag">${diffLabel(e.difficulty)}</span>` : '';
-      return h`<div class="det-ex"><div class="det-ex__name">${esc(name)}${diff}</div><div class="det-ex__sets">${sets}</div></div>`;
+      const chev = live ? '<span class="det-ex__chev">›</span>' : '';
+      return h`<div class="det-ex${live ? ' det-ex--tap' : ''}"${live ? ` data-exdetail="${e.exerciseId}"` : ''}>
+        <div class="det-ex__name">${esc(name)}${diff}</div><div class="det-ex__sets">${sets}${chev}</div></div>`;
     }).join('');
     const vol = sessionVolume(s);
-    body += `<div class="small muted mt">Total volume: <b>${vol.toLocaleString()} lb</b></div>`;
+    body += `<div class="small muted mt">Total volume: <b>${vol.toLocaleString()} lb</b> · tap a lift for its full history</div>`;
   } else {
     body = `<div class="muted">${esc(s.kind === 'cardio' ? (s.cardioType === 'interval' ? 'Intervals' : 'Zone 2') : (ACTIVITY_MAP[s.activity] || ACTIVITY_MAP.other).label)} · ${s.durationMin} min${s.avgHR ? ` · avg ${s.avgHR} bpm` : ''}</div>`;
   }
@@ -1195,6 +1408,9 @@ function sessionDetail(id) {
     update((st) => { st.sessions = st.sessions.filter((x) => x.id !== id); });
     closeModal(); toast('Deleted'); renderHistory();
   });
+  modalRoot.querySelectorAll('[data-exdetail]').forEach((el) => el.addEventListener('click', () => {
+    closeModal(); openExerciseDetail(el.dataset.exdetail);
+  }));
 }
 
 // ================= SETUP =================
