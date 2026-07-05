@@ -1,18 +1,23 @@
 :root {
-  --bg: #0f1320;
-  --bg-2: #161b2e;
-  --card: #1b2137;
-  --card-2: #222a45;
-  --line: #2c3557;
-  --text: #eef1fb;
-  --muted: #9aa4c7;
-  --accent: #6d8bff;
-  --accent-2: #3ad0a3;
-  --warn: #ffb454;
-  --danger: #ff6d84;
-  --good: #3ad0a3;
-  --radius: 16px;
-  --radius-sm: 11px;
+  /* warm-neutral "training log" palette (dark) */
+  --bg: #141312;
+  --bg-2: #1c1b19;
+  --card: #211f1d;
+  --card-2: #2a2825;
+  --line: #37342f;
+  --text: #f2efe9;
+  --muted: #a49f95;
+  --accent: #df6127;        /* signal orange */
+  --accent-2: #20a89a;      /* teal */
+  --warn: #e0a12a;
+  --danger: #d1553f;        /* warm brick red (not pink) */
+  --good: #20a89a;
+  /* data-viz series (validated for this surface) */
+  --chart-1: #df6127;       /* strength / volume / intervals */
+  --chart-2: #20a89a;       /* zone 2 / aerobic */
+  --chart-grid: #2c2a27;
+  --radius: 14px;
+  --radius-sm: 10px;
   --pad: 16px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -22,15 +27,22 @@
 
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #f4f6fc;
-    --bg-2: #eaeef8;
-    --card: #ffffff;
-    --card-2: #f2f5fd;
-    --line: #dbe2f2;
-    --text: #141a2e;
-    --muted: #5c6685;
-    --accent: #3d5bef;
-    --accent-2: #12a97f;
+    /* warm paper (light) */
+    --bg: #f0ede6;
+    --bg-2: #e9e5db;
+    --card: #faf8f3;
+    --card-2: #efece4;
+    --line: #ddd8cc;
+    --text: #221f1b;
+    --muted: #6f6a5f;
+    --accent: #c05622;
+    --accent-2: #0a8a6f;
+    --warn: #a9720a;
+    --danger: #b8412a;
+    --good: #0a8a6f;
+    --chart-1: #c05622;
+    --chart-2: #0a8a6f;
+    --chart-grid: #e3dfd4;
     color-scheme: light;
   }
 }
@@ -71,7 +83,7 @@ body {
 /* Tab bar */
 .tabbar {
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   background: color-mix(in srgb, var(--bg-2) 92%, transparent);
   backdrop-filter: blur(14px);
   border-top: 1px solid var(--line);
@@ -135,6 +147,9 @@ body {
 .mvw.is-met .mvw__badge { background: color-mix(in srgb, var(--good) 25%, var(--card)); }
 .mvw__text { font-size: 0.86rem; }
 .mvw__text b { display: block; margin-bottom: 2px; }
+.mvw__stats { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.mvw__stats span { white-space: nowrap; }
+.mvw__stats b { display: inline; font-variant-numeric: tabular-nums; }
 
 /* Suggestions */
 .suggest { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--line); }
@@ -253,27 +268,26 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
    StrongLifts-style guided workout, rest timer & home hero
    ============================================================ */
 
-/* Next-workout hero */
+/* Next-workout hero — flat, editorial card with an accent rule */
 .hero {
   border-radius: var(--radius);
   padding: 18px;
-  margin-bottom: 14px;
-  color: #fff;
-  background: linear-gradient(135deg, #4b63ff 0%, #7a4bff 55%, #b44bff 100%);
-  box-shadow: 0 12px 30px -12px rgba(90, 80, 255, .6);
+  margin-bottom: 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
 }
 .hero__top { display: flex; justify-content: space-between; align-items: flex-start; }
-.hero__eyebrow { font-size: 0.68rem; letter-spacing: .12em; opacity: .8; font-weight: 700; }
-.hero__title { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.02em; margin-top: 2px; }
-.hero__badge { font-size: 1.6rem; }
-.hero__exs { margin: 14px 0; display: flex; flex-direction: column; gap: 2px; }
-.hero-ex { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: baseline; padding: 6px 0; border-top: 1px solid rgba(255,255,255,.16); }
+.hero__eyebrow { font-size: 0.66rem; letter-spacing: .16em; color: var(--accent); font-weight: 700; text-transform: uppercase; }
+.hero__title { font-size: 1.32rem; font-weight: 700; letter-spacing: -0.02em; margin-top: 3px; }
+.hero__badge { font-size: 0.72rem; color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; line-height: 1.3; }
+.hero__exs { margin: 14px 0 16px; display: flex; flex-direction: column; gap: 1px; }
+.hero-ex { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--line); }
 .hero-ex:first-child { border-top: 0; }
 .hero-ex__name { font-weight: 600; }
-.hero-ex__scheme { font-size: 0.8rem; opacity: .85; font-variant-numeric: tabular-nums; }
-.hero-ex__wt { font-weight: 800; font-variant-numeric: tabular-nums; min-width: 62px; text-align: right; }
-.hero__start { background: rgba(255,255,255,.96); color: #3a2bd0; border: 0; font-weight: 800; }
-.hero__start:active { background: #fff; }
+.hero-ex__scheme { font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.hero-ex__wt { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 62px; text-align: right; }
+.hero__start { font-weight: 700; }
 
 /* Log choice hero variant */
 .logchoice__btn--hero { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--card)); }
@@ -388,6 +402,53 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .det-ex__sets { color: var(--muted); font-size: 0.82rem; font-variant-numeric: tabular-nums; text-align: right; }
 
 /* subtle entrance so views feel alive */
-.view > .card, .view > .hero, .view > .wex, .view > .histsum, .view > .hist-item { animation: rise .28s ease both; }
+.view > .card, .view > .hero, .view > .wex, .view > .histsum, .view > .hist-item, .view > .statgrid { animation: rise .28s ease both; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .view > * { animation: none !important; } }
+
+/* ============================================================
+   Progress view — stat tiles, segmented control & SVG charts
+   ============================================================ */
+
+/* stat tiles */
+.statgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+.stat { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 13px 12px; }
+.stat__val { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.05; }
+.stat__label { font-size: 0.7rem; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .05em; }
+.stat__sub { font-size: 0.72rem; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.stat__sub--up { color: var(--good); }
+
+/* segmented control (exercise / range picker) */
+.seg { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; margin: 0 0 14px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.seg::-webkit-scrollbar { display: none; }
+.segbtn {
+  appearance: none; flex: 0 0 auto; padding: 7px 13px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card); color: var(--muted);
+  font-size: 0.82rem; font-weight: 600; cursor: pointer; white-space: nowrap; transition: color .15s, border-color .15s, background .15s;
+}
+.segbtn.is-active { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--card)); }
+
+/* chart */
+.chart { position: relative; margin-top: 4px; }
+.chart svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
+.chart__axis { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.chart__grid { stroke: var(--chart-grid); stroke-width: 1; }
+.chart__baseline { stroke: var(--line); stroke-width: 1; }
+.chart__line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart__area { opacity: .10; }
+.chart__dot { stroke: var(--card); stroke-width: 2; }
+.chart__endlabel { fill: var(--text); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.chart__barlabel { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; text-anchor: middle; }
+.chart__hit { fill: transparent; cursor: pointer; }
+.chart__legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 2px 2px 12px; }
+.chart__key { display: inline-flex; align-items: center; gap: 6px; font-size: 0.76rem; color: var(--muted); }
+.chart__swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.chart__tip {
+  position: absolute; z-index: 5; pointer-events: none; transform: translate(-50%, -120%);
+  background: var(--text); color: var(--bg); padding: 6px 9px; border-radius: 8px;
+  font-size: 0.74rem; font-weight: 600; white-space: nowrap; opacity: 0; transition: opacity .1s;
+  box-shadow: 0 6px 18px rgba(0,0,0,.28); font-variant-numeric: tabular-nums;
+}
+.chart__tip.is-on { opacity: 1; }
+.chart__tip b { font-weight: 700; }
+.chart-empty { text-align: center; color: var(--muted); font-size: 0.84rem; padding: 26px 12px; }

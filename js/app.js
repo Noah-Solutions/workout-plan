@@ -4,12 +4,13 @@ import {
   MUSCLES, PATTERNS, PATTERN_LABEL,
 } from './store.js';
 import {
-  aggregateWeek, weekRange, fmtWeekLabel, fmtDate, todayISO,
+  aggregateWeek, weekRange, weekStart, toISODate, fmtWeekLabel, fmtDate, todayISO,
   proteinTarget, ACTIVITY_MAP,
 } from './week.js';
 import { suggestNext, commitExerciseState, fmtWeight, lastPerformance, guidedTarget, applyWorkoutResult, warmupSets } from './progression.js';
 import { TEMPLATES } from './templates.js';
 import { platesLabel, platesFor } from './plates.js';
+import { lineChart, barChart, legend, mountTips } from './charts.js';
 import * as store from './store.js';
 import * as sync from './sync.js';
 import * as timer from './timer.js';
@@ -37,6 +38,8 @@ let currentTab = 'week';
 let draft = null;
 // in-progress guided (StrongLifts-style) workout
 let workout = null;
+// remembered exercise selection on the Progress tab
+let progressSel = null;
 
 // ---------- helpers ----------
 const h = (strings, ...vals) => strings.reduce((a, s, i) => a + s + (vals[i] ?? ''), '');
@@ -84,7 +87,7 @@ function openModal(title, bodyHTML) {
 function closeModal() { modalRoot.innerHTML = ''; }
 
 // ---------- router ----------
-const TITLES = { week: 'This Week', log: 'Log a Session', history: 'History', setup: 'Setup' };
+const TITLES = { week: 'This Week', log: 'Log a Session', progress: 'Progress', history: 'History', setup: 'Setup' };
 function setTab(tab) {
   currentTab = tab;
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === tab));
@@ -102,6 +105,7 @@ function render() {
   weekLabelEl.textContent = currentTab === 'week' ? fmtWeekLabel(range) : '';
   if (currentTab === 'week') renderWeek();
   else if (currentTab === 'log') renderLog();
+  else if (currentTab === 'progress') renderProgress();
   else if (currentTab === 'history') renderHistory();
   else if (currentTab === 'setup') renderSetup();
 }
@@ -131,8 +135,10 @@ function renderWeek() {
       <div class="mvw__text">
         <b>${mvw.met ? 'Minimum viable week met' : 'Minimum viable week'}</b>
         <span class="muted">2 full-body lifts hitting all 4 patterns + ~75 min cardio.</span>
-        <div class="mt small">
-          Lifts: <b>${mvw.liftSessions}</b>/2 &nbsp;·&nbsp; Patterns: <b>${mvw.patternsCovered}</b>/4 &nbsp;·&nbsp; Cardio: <b>${mvw.totalCardioMin}</b>/75 min
+        <div class="mt small mvw__stats">
+          <span>Lifts <b>${mvw.liftSessions}</b>/2</span>
+          <span>Patterns <b>${mvw.patternsCovered}</b>/4</span>
+          <span>Cardio <b>${mvw.totalCardioMin}</b>/75m</span>
         </div>
       </div>
     </div>
@@ -243,13 +249,13 @@ function nextWorkoutHeroHTML() {
   return h`<div class="hero">
     <div class="hero__top">
       <div>
-        <div class="hero__eyebrow">NEXT WORKOUT</div>
+        <div class="hero__eyebrow">Next workout</div>
         <div class="hero__title">${esc(tpl.name)}</div>
       </div>
-      <span class="hero__badge">💪</span>
+      <span class="hero__badge">${exs.length} lift${exs.length === 1 ? '' : 's'}</span>
     </div>
     <div class="hero__exs">${rows}</div>
-    <button class="btn btn--accent hero__start" id="heroStart">▶ Start workout</button>
+    <button class="btn btn--accent hero__start" id="heroStart">Start workout</button>
   </div>`;
 }
 
@@ -733,6 +739,159 @@ function renderActivityDraft() {
     }));
     draft = null; toast('Activity saved'); setTab('week');
   });
+}
+
+// ================= PROGRESS =================
+function compact(n) {
+  n = Math.round(n);
+  if (Math.abs(n) >= 1000) return (n / 1000).toFixed(Math.abs(n) >= 10000 ? 0 : 1).replace(/\.0$/, '') + 'k';
+  return String(n);
+}
+function e1rm(w, reps) { return w * (1 + reps / 30); }
+
+// Best training metric for one exercise's logged sets:
+// weighted -> estimated 1RM (Epley); bodyweight -> top reps; timed -> top seconds.
+function exerciseMetric(ex, sets) {
+  const working = (sets || []).filter((st) => Number(st.reps) > 0);
+  if (!working.length) return null;
+  if (ex.unit === 'bw' || ex.unit === 'sec') return Math.max(...working.map((st) => Number(st.reps)));
+  return Math.round(Math.max(...working.map((st) => e1rm(Number(st.weight) || 0, Number(st.reps)))));
+}
+function metricKind(ex) { return ex.unit === 'bw' ? 'reps' : ex.unit === 'sec' ? 'sec' : 'e1RM'; }
+function fmtMetric(ex, v) { return ex.unit === 'sec' ? `${v}s` : ex.unit === 'bw' ? `${v} reps` : `${compact(v)} ${ex.unit}`; }
+
+// Build the last N Monday-anchored weeks (oldest first).
+function lastNWeeks(n) {
+  const base = weekStart(new Date());
+  const weeks = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const s = new Date(base); s.setDate(s.getDate() - i * 7);
+    const e = new Date(s); e.setDate(e.getDate() + 6);
+    weeks.push({
+      start: s, startISO: toISODate(s), endISO: toISODate(e),
+      label: s.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+    });
+  }
+  return weeks;
+}
+
+function renderProgress() {
+  const sessions = get().sessions;
+  const strengthSessions = sessions.filter((s) => s.kind === 'strength');
+
+  if (!sessions.length) {
+    viewEl.innerHTML = `<div class="empty"><div class="empty__ico">📈</div>No data to chart yet.<br>Log a few sessions and your progress shows up here.</div>`;
+    return;
+  }
+
+  // ---- headline stats ----
+  const weeks12 = lastNWeeks(12);
+  const volOfWeek = (w) => sessions.filter((s) => s.kind === 'strength' && s.date >= w.startISO && s.date <= w.endISO)
+    .reduce((a, s) => a + sessionVolume(s), 0);
+  const thisVol = volOfWeek(weeks12[weeks12.length - 1]);
+  const lastVol = volOfWeek(weeks12[weeks12.length - 2]);
+  const volDelta = lastVol > 0 ? Math.round(((thisVol - lastVol) / lastVol) * 100) : null;
+
+  // training streak: consecutive most-recent weeks that have any session
+  const hasAny = (w) => sessions.some((s) => s.date >= w.startISO && s.date <= w.endISO);
+  let streak = 0;
+  for (let i = weeks12.length - 1; i >= 0; i--) { if (hasAny(weeks12[i])) streak++; else break; }
+
+  // best estimated 1RM across weighted lifts
+  let best = null;
+  strengthSessions.forEach((s) => (s.entries || []).forEach((en) => {
+    const ex = exerciseById(en.exerciseId) || en.exSnapshot;
+    if (!ex || ex.unit === 'bw' || ex.unit === 'sec') return;
+    const m = exerciseMetric(ex, en.sets);
+    if (m != null && (!best || m > best.v)) best = { v: m, name: ex.name, unit: ex.unit };
+  }));
+
+  const stats = h`<div class="statgrid">
+    <div class="stat">
+      <div class="stat__val">${compact(thisVol)}</div>
+      <div class="stat__label">Volume (lb)</div>
+      ${volDelta != null ? `<div class="stat__sub ${volDelta >= 0 ? 'stat__sub--up' : ''}">${volDelta >= 0 ? '▲' : '▼'} ${Math.abs(volDelta)}% vs last</div>` : '<div class="stat__sub">first week</div>'}
+    </div>
+    <div class="stat">
+      <div class="stat__val">${best ? compact(best.v) : '—'}</div>
+      <div class="stat__label">Best e1RM</div>
+      <div class="stat__sub">${best ? esc(best.name) : 'log a lift'}</div>
+    </div>
+    <div class="stat">
+      <div class="stat__val">${streak}</div>
+      <div class="stat__label">Week streak</div>
+      <div class="stat__sub">${strengthSessions.length} lift${strengthSessions.length === 1 ? '' : 's'} total</div>
+    </div>
+  </div>`;
+
+  // ---- strength progression (per-exercise line chart) ----
+  // exercises with >= 2 sessions of usable data, most-logged first
+  const perEx = {};
+  strengthSessions
+    .slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+    .forEach((s) => (s.entries || []).forEach((en) => {
+      const ex = exerciseById(en.exerciseId) || en.exSnapshot;
+      if (!ex) return;
+      const m = exerciseMetric(ex, en.sets);
+      if (m == null) return;
+      (perEx[en.exerciseId] = perEx[en.exerciseId] || { ex, pts: [] }).pts.push({ date: s.date, v: m });
+    }));
+  const chartable = Object.entries(perEx).filter(([, o]) => o.pts.length >= 2)
+    .sort((a, b) => b[1].pts.length - a[1].pts.length);
+
+  let strengthCard;
+  if (!chartable.length) {
+    strengthCard = h`<div class="card">
+      <div class="card__title"><h2>Strength trend</h2><span class="card__hint">est. 1RM</span></div>
+      <div class="chart-empty">Log an exercise across at least two sessions to see its curve.</div>
+    </div>`;
+  } else {
+    if (!progressSel || !perEx[progressSel] || perEx[progressSel].pts.length < 2) progressSel = chartable[0][0];
+    const seg = chartable.map(([id, o]) =>
+      `<button class="segbtn ${id === progressSel ? 'is-active' : ''}" data-ex="${id}">${esc(o.ex.name)}</button>`).join('');
+    const o = perEx[progressSel];
+    const pts = o.pts.map((p) => ({ t: fmtShort(p.date), full: fmtDate(p.date), v: p.v }));
+    strengthCard = h`<div class="card">
+      <div class="card__title"><h2>Strength trend</h2><span class="card__hint">${metricKind(o.ex)}</span></div>
+      <div class="seg">${seg}</div>
+      ${lineChart(pts, { yFmt: (v) => compact(v), valFmt: (v) => fmtMetric(o.ex, v), color: '--chart-1' })}
+    </div>`;
+  }
+
+  // ---- weekly training volume (bars) ----
+  const weeks8 = lastNWeeks(8);
+  const volGroups = weeks8.map((w) => { const v = volOfWeek(w); return { label: w.label, full: `Week of ${w.label}`, total: v, segs: [{ key: 'vol', v }] }; });
+  const volCard = h`<div class="card">
+    <div class="card__title"><h2>Weekly volume</h2><span class="card__hint">lb lifted · 8 wks</span></div>
+    ${volGroups.some((g) => g.total > 0)
+      ? barChart(volGroups, [{ key: 'vol', name: 'Volume', color: '--chart-1' }], { yFmt: (v) => compact(v), valFmt: (v) => compact(v) })
+      : '<div class="chart-empty">No lifting logged in the last 8 weeks.</div>'}
+  </div>`;
+
+  // ---- weekly cardio minutes (stacked: Zone 2 + Intervals) ----
+  const cardioSeries = [{ key: 'z2', name: 'Zone 2', color: '--chart-2' }, { key: 'int', name: 'Intervals', color: '--chart-1' }];
+  const cardioGroups = weeks8.map((w) => {
+    const a = aggregateWeek(new Date(w.start));
+    return { label: w.label, full: `Week of ${w.label}`, segs: [{ key: 'z2', v: a.zone2Min }, { key: 'int', v: a.intervalMin }] };
+  });
+  const cardioCard = h`<div class="card">
+    <div class="card__title"><h2>Weekly cardio</h2><span class="card__hint">minutes · 8 wks</span></div>
+    ${cardioGroups.some((g) => g.segs.some((s) => s.v > 0))
+      ? legend(cardioSeries) + barChart(cardioGroups, cardioSeries, { yFmt: (v) => String(v), valFmt: (v) => `${v}m` })
+      : '<div class="chart-empty">No cardio logged in the last 8 weeks.</div>'}
+  </div>`;
+
+  viewEl.innerHTML = stats + strengthCard + volCard + cardioCard;
+
+  viewEl.querySelectorAll('[data-ex]').forEach((b) => b.addEventListener('click', () => {
+    progressSel = b.dataset.ex; renderProgress();
+  }));
+  mountTips(viewEl);
+}
+
+// short date for chart x-axis, e.g. "Jul 5"
+function fmtShort(iso) {
+  return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 // ================= HISTORY =================

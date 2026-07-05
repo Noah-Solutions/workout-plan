@@ -20,6 +20,10 @@ week against the targets and **auto-adjusts your next session** based on how the
   - **Minimum viable week** banner: 2 full-body lifts hitting squat/hinge/push/pull + ~75 min cardio.
   - **Progression queue** — exercises ready to move up, computed from your logs.
   - **Protein** target (g/kg × bodyweight) with a daily quick-logger.
+- **Progress charts** — a dedicated tab that turns your log into trends: per-lift **estimated 1RM**
+  over time (line), **weekly training volume** and **weekly cardio minutes** (Zone 2 vs intervals)
+  as bars, plus headline tiles for this week's volume, best e1RM, and week streak. Charts are
+  hand-rolled SVG — no libraries, fully offline, and theme-aware.
 - **Guided workout (StrongLifts-style)** — a "Start workout" flow that shows your exact **target
   weight** for every lift, a **plate breakdown** per side, and tap-to-complete **set circles** (tap
   again if you missed reps). A built-in **rest timer** auto-starts after each set with a beep/vibrate
@@ -128,6 +132,7 @@ js/store.js           persistent state, defaults, seed exercise library
 js/week.js            date helpers + weekly aggregation vs targets
 js/progression.js     auto-progression + deload + difficulty (guided workout)
 js/plates.js          barbell plate calculator (lbs)
+js/charts.js          dependency-free SVG line/bar charts (Progress tab)
 js/timer.js           rest timer (beep + vibrate)
 js/templates.js       starter session templates
 js/sync.js            two-way sync client (REST, bearer-token)

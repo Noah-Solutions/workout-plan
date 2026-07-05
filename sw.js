@@ -1,5 +1,5 @@
 // sw.js — offline app shell cache
-const CACHE = 'ct-v3';
+const CACHE = 'ct-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -12,6 +12,7 @@ const ASSETS = [
   './js/sync.js',
   './js/plates.js',
   './js/timer.js',
+  './js/charts.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
