@@ -248,3 +248,94 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .ex-pick:active { background: var(--card); }
 .ex-pick__name { font-weight: 600; font-size: 0.92rem; }
 .ex-pick__meta { color: var(--muted); font-size: 0.74rem; margin-top: 2px; }
+
+/* ============================================================
+   StrongLifts-style guided workout, rest timer & home hero
+   ============================================================ */
+
+/* Next-workout hero */
+.hero {
+  border-radius: var(--radius);
+  padding: 18px;
+  margin-bottom: 14px;
+  color: #fff;
+  background: linear-gradient(135deg, #4b63ff 0%, #7a4bff 55%, #b44bff 100%);
+  box-shadow: 0 12px 30px -12px rgba(90, 80, 255, .6);
+}
+.hero__top { display: flex; justify-content: space-between; align-items: flex-start; }
+.hero__eyebrow { font-size: 0.68rem; letter-spacing: .12em; opacity: .8; font-weight: 700; }
+.hero__title { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.02em; margin-top: 2px; }
+.hero__badge { font-size: 1.6rem; }
+.hero__exs { margin: 14px 0; display: flex; flex-direction: column; gap: 2px; }
+.hero-ex { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: baseline; padding: 6px 0; border-top: 1px solid rgba(255,255,255,.16); }
+.hero-ex:first-child { border-top: 0; }
+.hero-ex__name { font-weight: 600; }
+.hero-ex__scheme { font-size: 0.8rem; opacity: .85; font-variant-numeric: tabular-nums; }
+.hero-ex__wt { font-weight: 800; font-variant-numeric: tabular-nums; min-width: 62px; text-align: right; }
+.hero__start { background: rgba(255,255,255,.96); color: #3a2bd0; border: 0; font-weight: 800; }
+.hero__start:active { background: #fff; }
+
+/* Log choice hero variant */
+.logchoice__btn--hero { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--card)); }
+
+/* Guided workout screen */
+.wtop { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.wex { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 15px; margin-bottom: 14px; }
+.wex__head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.wex__name { font-size: 1.05rem; font-weight: 700; letter-spacing: -0.01em; }
+.wex__wt { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.wex__wt--bw { color: var(--muted); font-weight: 600; font-size: 0.9rem; }
+.stepper {
+  width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--card-2); color: var(--text); font-size: 1.3rem; line-height: 1; cursor: pointer;
+  display: grid; place-items: center;
+}
+.stepper:active { background: var(--accent); color: #fff; }
+.wex__plates { font-size: 0.82rem; color: var(--text); margin-top: 8px; font-variant-numeric: tabular-nums; }
+.wex__scheme { margin-top: 6px; }
+
+/* Set circles */
+.setdots { display: flex; flex-wrap: wrap; gap: 12px; margin: 14px 0 4px; }
+.setdot {
+  width: 54px; height: 54px; border-radius: 50%;
+  border: 2px solid var(--line); background: var(--card-2); color: var(--muted);
+  font-size: 1.1rem; font-weight: 800; cursor: pointer; font-variant-numeric: tabular-nums;
+  transition: transform .08s, background .15s, color .15s, border-color .15s;
+}
+.setdot:active { transform: scale(.92); }
+.setdot.is-done { background: var(--good); border-color: var(--good); color: #05231b; }
+.setdot.is-miss { background: var(--warn); border-color: var(--warn); color: #3a2600; }
+
+/* Difficulty */
+.wex__diff { margin-top: 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.wex__diff.is-dim { opacity: .5; }
+.wex__diff-label { font-size: 0.8rem; color: var(--muted); }
+.diffbtns { display: flex; gap: 6px; }
+.diffbtn {
+  padding: 7px 9px; border-radius: 9px; border: 1px solid var(--line);
+  background: var(--card-2); color: var(--muted); font-size: 0.74rem; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+.diffbtn.is-sel { color: #fff; }
+.diffbtn.diff--easy { background: var(--good); border-color: var(--good); color: #05231b; }
+.diffbtn.diff--good { background: var(--accent); border-color: var(--accent); }
+.diffbtn.diff--hard { background: var(--warn); border-color: var(--warn); color: #3a2600; }
+.diffbtn.diff--failed { background: var(--danger); border-color: var(--danger); }
+
+.btn--lg { padding: 16px; font-size: 1.02rem; }
+
+/* Rest timer bar */
+.restbar {
+  position: fixed; left: 0; right: 0;
+  bottom: calc(var(--tabbar-h) + var(--safe-bottom));
+  z-index: 25; background: var(--bg-2); border-top: 1px solid var(--line);
+  overflow: hidden; box-shadow: 0 -6px 20px -8px rgba(0,0,0,.4);
+}
+.restbar--hidden { display: none; }
+.restbar__fill { position: absolute; top: 0; left: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 22%, transparent); transition: width 1s linear; z-index: 0; }
+.restbar--done .restbar__fill { background: color-mix(in srgb, var(--good) 30%, transparent); }
+.restbar__row { position: relative; z-index: 1; display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+.restbar__label { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
+.restbar__time { font-size: 1.4rem; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.restbar__btns { margin-left: auto; display: flex; gap: 6px; }
+.restbar__btn { padding: 7px 11px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); color: var(--text); font-size: 0.8rem; font-weight: 700; cursor: pointer; }
+.restbar__btn--skip { background: var(--accent); border-color: var(--accent); color: #fff; }

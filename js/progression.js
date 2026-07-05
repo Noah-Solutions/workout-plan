@@ -30,7 +30,7 @@ export function lastPerformance(exId) {
 export function suggestNext(ex) {
   const [lo, hi] = ex.repRange;
   const last = lastPerformance(ex.id);
-  const baseWeight = ex.lastWeight || 0;
+  const baseWeight = ex.targetWeight != null ? ex.targetWeight : (ex.lastWeight || 0);
 
   if (!last) {
     return {
@@ -117,4 +117,69 @@ export function fmtWeight(w, unit) {
   if (unit === 'sec') return `${w}s`;
   const n = Number(w);
   return `${Number.isInteger(n) ? n : n.toFixed(1)} ${unit}`;
+}
+
+// ---------- guided (StrongLifts-style) workout model ----------
+
+// Today's prescribed work for an exercise: weight, sets, reps.
+export function guidedTarget(ex) {
+  const targetReps = ex.repRange ? ex.repRange[0] : 5;
+  return {
+    weight: ex.targetWeight != null ? ex.targetWeight : (ex.lastWeight || 0),
+    sets: ex.workSets || 3,
+    reps: targetReps,
+    unit: ex.unit,
+    increment: ex.increment != null ? ex.increment : loadIncrement(ex),
+  };
+}
+
+const DIFFICULTY = ['easy', 'good', 'hard', 'failed'];
+
+// Apply the result of a completed exercise to its progression state, mutating the
+// exercise in place. Returns { outcome, from, to, delta } for the summary.
+//   success  = every work set met the target reps AND difficulty !== 'failed'
+//   success  -> +increment (double if "easy"); reset fail streak
+//   miss     -> repeat weight; +1 fail streak; at 3 fails -> deload 10% (reset streak)
+export function applyWorkoutResult(ex, sets, difficulty) {
+  const tgt = guidedTarget(ex);
+  const working = (sets || []).filter((st) => Number(st.reps) > 0);
+  const usedWeight = ex.unit === 'bw' || ex.unit === 'sec'
+    ? tgt.weight
+    : (mode(working.map((st) => Number(st.weight) || 0)) || tgt.weight);
+  ex.lastWeight = usedWeight;
+
+  const targetReps = tgt.reps;
+  const enough = working.length >= tgt.sets;
+  const allHit = enough && working.every((st) => Number(st.reps) >= targetReps);
+  const success = allHit && difficulty !== 'failed';
+
+  const from = usedWeight;
+
+  // bodyweight / timed: progress by reps or seconds, no deload machinery
+  if (ex.unit === 'bw') {
+    ex.failStreak = 0;
+    ex.targetWeight = 0;
+    return { outcome: success ? 'progress' : 'hold', from: 0, to: 0, delta: 0, byReps: true };
+  }
+
+  if (success) {
+    const inc = (difficulty === 'easy' ? 2 : 1) * (ex.increment != null ? ex.increment : loadIncrement(ex));
+    ex.failStreak = 0;
+    ex.targetWeight = roundToStep(usedWeight + inc, ex.unit);
+    return { outcome: 'progress', from, to: ex.targetWeight, delta: ex.targetWeight - from };
+  }
+
+  ex.failStreak = (ex.failStreak || 0) + 1;
+  if (ex.failStreak >= 3) {
+    ex.failStreak = 0;
+    ex.targetWeight = roundToStep(usedWeight * 0.9, ex.unit);
+    return { outcome: 'deload', from, to: ex.targetWeight, delta: ex.targetWeight - from };
+  }
+  ex.targetWeight = usedWeight; // repeat same weight next time
+  return { outcome: 'hold', from, to: usedWeight, delta: 0, fails: ex.failStreak };
+}
+
+function roundToStep(w, unit) {
+  if (unit === 'sec') return Math.round(w / 5) * 5;
+  return Math.round(w / 5) * 5; // nearest 5 lb (loadable with a 2.5 plate per side)
 }

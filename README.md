@@ -20,9 +20,14 @@ week against the targets and **auto-adjusts your next session** based on how the
   - **Minimum viable week** banner: 2 full-body lifts hitting squat/hinge/push/pull + ~75 min cardio.
   - **Progression queue** — exercises ready to move up, computed from your logs.
   - **Protein** target (g/kg × bodyweight) with a daily quick-logger.
-- **Auto-progression engine** — when you hit the top of an exercise's rep range at target RIR on all
-  sets, it suggests adding load (upper ~5, lower ~10) and resetting to the bottom of the range;
-  otherwise it suggests +1 rep or holding. Suggestions pre-fill the next session.
+- **Guided workout (StrongLifts-style)** — a "Start workout" flow that shows your exact **target
+  weight** for every lift, a **plate breakdown** per side, and tap-to-complete **set circles** (tap
+  again if you missed reps). A built-in **rest timer** auto-starts after each set with a beep/vibrate
+  when it's up. You rate each lift's **difficulty** (Easy / Good / Hard / Failed).
+- **Auto-progression & deload** — on success the next target goes up automatically (+5 lb upper,
+  +10 lb lower; **double** if you tagged it Easy). Miss the reps and it holds; miss the same lift
+  **3 sessions in a row and it deloads 10%**. Weights are in **lbs**, rounded to loadable plates.
+  A "next workout" card on the home screen always shows what's coming and its weights.
 - **Flexible logging**
   - **Strength**: exercises → sets (weight / reps / RIR), from a template or built freely.
   - **Cardio**: Zone 2 or intervals (duration + optional avg HR).
@@ -121,7 +126,9 @@ index.html            app shell + bottom nav
 css/styles.css        mobile-first styling, light/dark aware
 js/store.js           persistent state, defaults, seed exercise library
 js/week.js            date helpers + weekly aggregation vs targets
-js/progression.js     autoregulated progression engine
+js/progression.js     auto-progression + deload + difficulty (guided workout)
+js/plates.js          barbell plate calculator (lbs)
+js/timer.js           rest timer (beep + vibrate)
 js/templates.js       starter session templates
 js/sync.js            two-way sync client (REST, bearer-token)
 js/app.js             UI, router, all views & event handling

@@ -13,24 +13,33 @@ export function uid() {
 }
 
 // Seed exercises are built from the plan's Option A / Option B lifts.
+// workSets/reps + increment/targetWeight/failStreak drive the guided (StrongLifts-style)
+// workout flow: show target weight, tick sets, auto-progress or deload.
 function seedExercises() {
-  const e = (name, pattern, muscles, repRange, targetRIR, lastWeight, unit) => ({
+  const e = (name, pattern, muscles, repRange, targetRIR, weight, unit, workSets, increment) => ({
     id: uid(), name, pattern, muscles, type: 'strength',
-    repRange, targetRIR, lastWeight, unit: unit || 'lb', custom: false, archived: false,
+    repRange, targetRIR, unit: unit || 'lb',
+    lastWeight: weight,          // last weight actually used
+    targetWeight: weight,        // weight to lift NEXT session (what the guided screen shows)
+    workSets: workSets || 3,     // number of work sets
+    increment: increment == null ? (pattern === 'squat' || pattern === 'hinge' ? 10 : 5) : increment,
+    failStreak: 0,               // consecutive failed sessions -> deload at 3
+    custom: false, archived: false,
   });
   return [
-    e('Back Squat', 'squat', ['Quads', 'Glutes'], [5, 5], 2, 115, 'lb'),
-    e('Bench Press', 'push', ['Chest', 'Triceps', 'Shoulders'], [5, 8], 2, 95, 'lb'),
-    e('Barbell Row', 'pull', ['Back', 'Biceps'], [8, 8], 2, 90, 'lb'),
-    e('Romanian Deadlift', 'hinge', ['Hamstrings', 'Glutes'], [5, 8], 2, 155, 'lb'),
-    e('Overhead Press', 'push', ['Shoulders', 'Triceps'], [5, 8], 2, 75, 'lb'),
-    e('Pull-up', 'pull', ['Back', 'Biceps'], [6, 10], 1, 0, 'bw'),
-    e('Barbell Curl', 'pull', ['Biceps'], [8, 12], 1, 45, 'lb'),
-    e('Triceps Pushdown', 'push', ['Triceps'], [10, 15], 1, 30, 'lb'),
-    e('Leg Curl', 'hinge', ['Hamstrings'], [10, 15], 1, 50, 'lb'),
-    e('Plank', 'core', ['Core'], [30, 60], 2, 0, 'sec'),
-    e('Goblet Squat', 'squat', ['Quads', 'Glutes'], [8, 12], 2, 50, 'lb'),
-    e('Lat Pulldown', 'pull', ['Back', 'Biceps'], [8, 12], 1, 90, 'lb'),
+    e('Back Squat', 'squat', ['Quads', 'Glutes'], [5, 5], 2, 115, 'lb', 5, 10),
+    e('Bench Press', 'push', ['Chest', 'Triceps', 'Shoulders'], [5, 5], 2, 95, 'lb', 5, 5),
+    e('Barbell Row', 'pull', ['Back', 'Biceps'], [5, 5], 2, 90, 'lb', 5, 5),
+    e('Romanian Deadlift', 'hinge', ['Hamstrings', 'Glutes'], [5, 5], 2, 155, 'lb', 5, 10),
+    e('Overhead Press', 'push', ['Shoulders', 'Triceps'], [5, 5], 2, 75, 'lb', 5, 5),
+    e('Deadlift', 'hinge', ['Hamstrings', 'Glutes', 'Back'], [5, 5], 2, 185, 'lb', 1, 10),
+    e('Pull-up', 'pull', ['Back', 'Biceps'], [6, 10], 1, 0, 'bw', 3, 0),
+    e('Barbell Curl', 'pull', ['Biceps'], [8, 12], 1, 45, 'lb', 3, 5),
+    e('Triceps Pushdown', 'push', ['Triceps'], [10, 15], 1, 30, 'lb', 3, 5),
+    e('Leg Curl', 'hinge', ['Hamstrings'], [10, 15], 1, 50, 'lb', 3, 5),
+    e('Plank', 'core', ['Core'], [30, 60], 2, 0, 'sec', 3, 5),
+    e('Goblet Squat', 'squat', ['Quads', 'Glutes'], [8, 12], 2, 50, 'lb', 3, 5),
+    e('Lat Pulldown', 'pull', ['Back', 'Biceps'], [8, 12], 1, 90, 'lb', 3, 5),
   ];
 }
 
@@ -48,6 +57,9 @@ function defaults() {
       units: 'lb',
       proteinPerKg: 1.6,
       maxHR: 190,
+      barWeightLb: 45,                       // Olympic barbell
+      platesLb: [45, 35, 25, 10, 5, 2.5],    // plates available per side (lbs)
+      restTimer: { enabled: true, seconds: 90, sound: true, vibrate: true },
       targets: {
         setsPerMuscle: 10,     // growth target per muscle / week
         maintenanceSets: 4,    // maintenance floor
@@ -74,9 +86,19 @@ export function load() {
       const d = defaults();
       state.settings = Object.assign({}, d.settings, state.settings);
       state.settings.targets = Object.assign({}, d.settings.targets, state.settings.targets || {});
+      state.settings.restTimer = Object.assign({}, d.settings.restTimer, state.settings.restTimer || {});
+      if (!state.settings.platesLb) state.settings.platesLb = d.settings.platesLb;
+      if (state.settings.barWeightLb == null) state.settings.barWeightLb = d.settings.barWeightLb;
       state.proteinLog = state.proteinLog || {};
       state.exercises = state.exercises || d.exercises;
       state.sessions = state.sessions || [];
+      // backfill new per-exercise guided-workout fields
+      (state.exercises || []).forEach((ex) => {
+        if (ex.targetWeight == null) ex.targetWeight = ex.lastWeight || 0;
+        if (ex.workSets == null) ex.workSets = ex.pattern === 'core' ? 3 : 3;
+        if (ex.increment == null) ex.increment = (ex.pattern === 'squat' || ex.pattern === 'hinge') ? 10 : 5;
+        if (ex.failStreak == null) ex.failStreak = 0;
+      });
       if (state.rev == null) state.rev = 0;
       // Backfill ONLY for pre-schema states missing the key entirely (they have real
       // data -> treat as current). A present-but-empty '' means a fresh, unmodified
