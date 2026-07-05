@@ -260,7 +260,7 @@ function renderWeek() {
 
   document.getElementById('goLog').addEventListener('click', () => { draft = null; setTab('log'); });
   document.getElementById('addProtein').addEventListener('click', proteinPrompt);
-  document.getElementById('openCheckin').addEventListener('click', () => openJournal(todayISO()));
+  viewEl.querySelectorAll('[data-checkin]').forEach((b) => b.addEventListener('click', () => openCheckin(todayISO(), b.dataset.checkin)));
   const startBtn = document.getElementById('heroStart');
   if (startBtn) startBtn.addEventListener('click', () => startWorkout(nextTemplate()));
 }
@@ -300,28 +300,28 @@ function nextWorkoutHeroHTML() {
   </div>`;
 }
 
-// "Daily check-in" quick card on the home dashboard.
+// "Daily check-ins" quick card on the home dashboard: morning + evening rows.
 function checkinCardHTML() {
   const j = get().journal[todayISO()];
-  let body;
-  if (j) {
-    const parts = [];
-    if (j.sleepDiff) parts.push(`Sleep ${j.sleepDiff}/5`);
-    if (j.drinks != null) parts.push(`${j.drinks} drink${j.drinks === 1 ? '' : 's'}`);
-    if (j.bw != null) parts.push(fmtBw(j.bw));
-    body = h`<div class="row-between">
-      <span class="small muted">${parts.length ? esc(parts.join(' · ')) : 'Logged today'}</span>
-      <button class="btn btn--sm btn--ghost" id="openCheckin">Edit</button>
-    </div>`;
-  } else {
-    body = h`<div class="row-between">
-      <span class="small muted">Sleep, drinks & recovery for today.</span>
-      <button class="btn btn--sm" id="openCheckin">Check in</button>
-    </div>`;
-  }
+  const mDone = morningDone(j), eDone = eveningDone(j);
+  const mStatus = mDone
+    ? [j.sleepDiff ? `Sleep ${j.sleepDiff}/5` : null, j.bw != null ? fmtBw(j.bw) : null].filter(Boolean).join(' · ') || 'Logged'
+    : "Last night's sleep";
+  const eStatus = eDone
+    ? [j.drinks != null ? `${j.drinks} drink${j.drinks === 1 ? '' : 's'}` : null, j.stress ? `stress ${j.stress}/5` : null].filter(Boolean).join(' · ') || 'Logged'
+    : 'How the day went';
   return h`<div class="card">
-    <div class="card__title"><h2>Daily check-in</h2><span class="card__hint">recovery journal</span></div>
-    ${body}
+    <div class="card__title"><h2>Daily check-ins</h2><span class="card__hint">recovery journal</span></div>
+    <div class="checkin-row">
+      <span class="checkin-row__ico">🌅</span>
+      <div class="checkin-row__body"><div class="checkin-row__t">Morning ${mDone ? '<span class="checkin-tick">✓</span>' : ''}</div><div class="small muted">${esc(mStatus)}</div></div>
+      <button class="btn btn--sm ${mDone ? 'btn--ghost' : ''}" data-checkin="morning">${mDone ? 'Edit' : 'Log'}</button>
+    </div>
+    <div class="checkin-row">
+      <span class="checkin-row__ico">🌙</span>
+      <div class="checkin-row__body"><div class="checkin-row__t">Evening ${eDone ? '<span class="checkin-tick">✓</span>' : ''}</div><div class="small muted">${esc(eStatus)}</div></div>
+      <button class="btn btn--sm ${eDone ? 'btn--ghost' : ''}" data-checkin="evening">${eDone ? 'Edit' : 'Log'}</button>
+    </div>
   </div>`;
 }
 
@@ -365,9 +365,13 @@ function renderLog() {
         <span class="logchoice__ico">🧗</span>
         <span><span class="logchoice__t">Other activity</span><span class="logchoice__d">Climbing, outdoor ride, hike — mapped to what it replaces</span></span>
       </button>
-      <button class="logchoice__btn" data-log="journal">
-        <span class="logchoice__ico">📓</span>
-        <span><span class="logchoice__t">Daily check-in</span><span class="logchoice__d">Bodyweight, sleep, drinks & how you're recovering</span></span>
+      <button class="logchoice__btn" data-log="morning">
+        <span class="logchoice__ico">🌅</span>
+        <span><span class="logchoice__t">Morning check-in</span><span class="logchoice__d">Last night's sleep, morning weigh-in & how you woke up</span></span>
+      </button>
+      <button class="logchoice__btn" data-log="evening">
+        <span class="logchoice__ico">🌙</span>
+        <span><span class="logchoice__t">Evening check-in</span><span class="logchoice__d">Drinks, stress, pre-sleep activity & notes on the day</span></span>
       </button>
     </div>
   `;
@@ -593,15 +597,15 @@ function startDraft(kind) {
   } else if (kind === 'activity') {
     draft = { kind: 'activity', activity: 'climbing', date: todayISO(), durationMin: 60, note: '' };
     renderDraft();
-  } else if (kind === 'journal') {
-    openJournal(todayISO());
+  } else if (kind === 'morning' || kind === 'evening') {
+    openCheckin(todayISO(), kind);
   }
 }
 
-// Open the daily check-in for a date (pre-filled if one exists). Jumps to Log.
-function openJournal(date) {
+// Open the daily check-in for a date & part (pre-filled if one exists). Jumps to Log.
+function openCheckin(date, part) {
   date = date || todayISO();
-  draft = { kind: 'journal', date, entry: { ...(get().journal[date] || {}) } };
+  draft = { kind: 'journal', part: part || defaultCheckinPart(), date, entry: { ...(get().journal[date] || {}) } };
   if (currentTab === 'log') renderDraft(); else setTab('log');
 }
 
@@ -609,7 +613,7 @@ function renderDraft() {
   if (draft.kind === 'strength') return renderStrengthDraft();
   if (draft.kind === 'cardio') return renderCardioDraft();
   if (draft.kind === 'activity') return renderActivityDraft();
-  if (draft.kind === 'journal') return renderJournalDraft();
+  if (draft.kind === 'journal') return renderCheckinDraft();
 }
 
 // ---- strength draft ----
@@ -822,43 +826,65 @@ function renderActivityDraft() {
 }
 
 // ---- daily check-in / journal draft ----
-function renderJournalDraft() {
+// The daily check-in is one record per day, captured in two moments:
+//   morning  → last night's sleep + how you woke up (sleep, bodyweight, energy, soreness)
+//   evening  → the day itself (drinks, stress, pre-sleep activity, notes)
+function morningDone(j) { return !!(j && (j.sleepDiff || j.bw != null || j.energy || j.soreness || (j.amNote || '').trim())); }
+function eveningDone(j) { return !!(j && (j.drinks != null || j.stress || (j.preSleep || '').trim() || (j.notes || '').trim())); }
+function defaultCheckinPart() { return new Date().getHours() < 14 ? 'morning' : 'evening'; }
+
+function renderCheckinDraft() {
   const e = draft.entry;
+  const part = draft.part || 'morning';
   const u = bwUnit();
   const bwVal = e.bw != null ? fromKg(e.bw, u).toFixed(1) : '';
-  viewEl.innerHTML = h`
-    <div class="card">
-      <div class="card__title"><h2>Daily check-in</h2><span class="card__hint">${relDay(draft.date)}</span></div>
-      <label class="field"><span>Date</span><input type="date" id="jDate" value="${draft.date}" /></label>
-      <label class="field"><span>Bodyweight (${u})</span>
-        <input type="number" inputmode="decimal" id="jBw" value="${bwVal}" placeholder="optional" /></label>
-    </div>
 
+  const toggle = h`<div class="seg seg--even">
+    <button type="button" class="segbtn ${part === 'morning' ? 'is-active' : ''}" data-part="morning">🌅 Morning</button>
+    <button type="button" class="segbtn ${part === 'evening' ? 'is-active' : ''}" data-part="evening">🌙 Evening</button>
+  </div>`;
+
+  const morning = h`
     <div class="card">
-      <div class="card__title"><h2>Sleep</h2><span class="card__hint">how hard to sleep</span></div>
+      <div class="card__title"><h2>Sleep</h2><span class="card__hint">last night</span></div>
       <label class="field"><span>Sleep difficulty${e.sleepDiff ? ` · ${SLEEP_LABELS[e.sleepDiff]}` : ''}</span></label>
       ${ratingHTML('sleepDiff', e.sleepDiff, ['1 · easy', '5 · very hard'])}
-      <label class="field mt"><span>Drinks (alcohol)</span>
-        <input type="number" inputmode="numeric" id="jDrinks" value="${e.drinks ?? ''}" placeholder="0" /></label>
-      <label class="field"><span>Pre-sleep activity</span>
-        <input type="text" id="jPre" value="${esc(e.preSleep || '')}" placeholder="screens, reading, stretching…" /></label>
     </div>
-
     <div class="card">
-      <div class="card__title"><h2>Readiness</h2><span class="card__hint">optional</span></div>
-      <label class="field"><span>Energy</span></label>
+      <div class="card__title"><h2>This morning</h2><span class="card__hint">optional</span></div>
+      <label class="field"><span>Bodyweight (${u})</span>
+        <input type="number" inputmode="decimal" id="jBw" value="${bwVal}" placeholder="morning weigh-in" /></label>
+      <label class="field"><span>Energy waking up</span></label>
       ${ratingHTML('energy', e.energy, ['1 · flat', '5 · great'])}
       <label class="field mt"><span>Soreness</span></label>
       ${ratingHTML('soreness', e.soreness, ['1 · none', '5 · very sore'])}
-      <label class="field mt"><span>Stress</span></label>
-      ${ratingHTML('stress', e.stress, ['1 · calm', '5 · high'])}
-    </div>
+      <label class="field mt" style="margin-bottom:0"><span>Sleep notes</span>
+        <input type="text" id="jAmNote" value="${esc(e.amNote || '')}" placeholder="woke at 3am, vivid dreams…" /></label>
+    </div>`;
 
+  const evening = h`
     <div class="card">
-      <label class="field" style="margin:0"><span>Other notes</span>
-        <textarea id="jNotes" rows="3" placeholder="anything worth remembering…">${esc(e.notes || '')}</textarea></label>
+      <div class="card__title"><h2>The day</h2><span class="card__hint">this evening</span></div>
+      <label class="field"><span>Drinks (alcohol)</span>
+        <input type="number" inputmode="numeric" id="jDrinks" value="${e.drinks ?? ''}" placeholder="0" /></label>
+      <label class="field"><span>Stress today</span></label>
+      ${ratingHTML('stress', e.stress, ['1 · calm', '5 · high'])}
+      <label class="field mt"><span>Pre-sleep activity</span>
+        <input type="text" id="jPre" value="${esc(e.preSleep || '')}" placeholder="screens, reading, stretching…" /></label>
     </div>
+    <div class="card">
+      <label class="field" style="margin:0"><span>Notes on the day</span>
+        <textarea id="jNotes" rows="3" placeholder="how the day went, training, food…">${esc(e.notes || '')}</textarea></label>
+    </div>`;
 
+  viewEl.innerHTML = h`
+    <div class="card">
+      <div class="card__title"><h2>${part === 'morning' ? '🌅 Morning check-in' : '🌙 Evening check-in'}</h2><span class="card__hint">${relDay(draft.date)}</span></div>
+      <p class="small muted" style="margin:2px 0 12px">${part === 'morning' ? 'How you slept and how you woke up.' : 'How the day itself went.'}</p>
+      ${toggle}
+      <label class="field" style="margin:0"><span>Date</span><input type="date" id="jDate" value="${draft.date}" /></label>
+    </div>
+    ${part === 'morning' ? morning : evening}
     <div class="btn-row">
       <button class="btn btn--ghost" id="cancelDraft">Cancel</button>
       <button class="btn btn--primary" id="saveJournal">Save check-in</button>
@@ -866,41 +892,48 @@ function renderJournalDraft() {
     <div style="height:8px"></div>
   `;
 
-  const bindText = (id, key) => document.getElementById(id).addEventListener('input', (ev) => { draft.entry[key] = ev.target.value; });
-  document.getElementById('jDate').addEventListener('change', (ev) => { draft.date = ev.target.value; renderJournalDraft(); });
+  // capture inputs live so switching Morning/Evening never loses what's typed
+  const bindText = (id, key) => { const el = document.getElementById(id); if (el) el.addEventListener('input', (ev) => { draft.entry[key] = ev.target.value; }); };
   bindText('jPre', 'preSleep');
   bindText('jNotes', 'notes');
-  // ratings: tap toggles (tap the selected value again to clear)
+  bindText('jAmNote', 'amNote');
+  const bwEl = document.getElementById('jBw');
+  if (bwEl) bwEl.addEventListener('input', (ev) => { const v = ev.target.value; draft.entry.bw = v === '' ? null : toKg(Number(v) || 0, u); });
+  const drEl = document.getElementById('jDrinks');
+  if (drEl) drEl.addEventListener('input', (ev) => { const v = ev.target.value; draft.entry.drinks = v === '' ? null : Math.max(0, Number(v) || 0); });
+
+  document.getElementById('jDate').addEventListener('change', (ev) => { draft.date = ev.target.value; renderCheckinDraft(); });
+  viewEl.querySelectorAll('[data-part]').forEach((b) => b.addEventListener('click', () => { draft.part = b.dataset.part; renderCheckinDraft(); }));
   viewEl.querySelectorAll('[data-rate]').forEach((b) => b.addEventListener('click', () => {
     const key = b.dataset.rate, val = Number(b.dataset.val);
     draft.entry[key] = draft.entry[key] === val ? null : val;
-    haptic(8); renderJournalDraft();
+    haptic(8); renderCheckinDraft();
   }));
   document.getElementById('cancelDraft').addEventListener('click', () => { draft = null; setTab('week'); });
-  document.getElementById('saveJournal').addEventListener('click', saveJournal);
+  document.getElementById('saveJournal').addEventListener('click', saveCheckin);
 }
 
-function saveJournal() {
+// Merge-save: draft.entry started as a copy of the day's record and inputs
+// update it live, so persisting the whole thing preserves the other half.
+function saveCheckin() {
   const e = draft.entry;
-  const bwRaw = document.getElementById('jBw').value;
-  const drinksRaw = document.getElementById('jDrinks').value;
   const entry = {
+    bw: e.bw != null ? e.bw : null,
     sleepDiff: e.sleepDiff || null,
     energy: e.energy || null, soreness: e.soreness || null, stress: e.stress || null,
-    drinks: drinksRaw === '' ? null : Math.max(0, Number(drinksRaw) || 0),
-    bw: bwRaw === '' ? null : toKg(Number(bwRaw) || 0, bwUnit()),
+    drinks: e.drinks != null ? e.drinks : null,
     preSleep: (e.preSleep || '').trim(),
+    amNote: (e.amNote || '').trim(),
     notes: (e.notes || '').trim(),
   };
-  const hasAny = entry.sleepDiff || entry.energy || entry.soreness || entry.stress ||
-    entry.drinks != null || entry.bw != null || entry.preSleep || entry.notes;
-  if (!hasAny) { toast('Nothing to save yet'); return; }
+  if (!morningDone(entry) && !eveningDone(entry)) { toast('Nothing to save yet'); return; }
   const date = draft.date;
+  const partLabel = draft.part === 'evening' ? 'Evening' : 'Morning';
   update((s) => {
     s.journal[date] = entry;
     if (entry.bw != null) s.settings.bodyweightKg = Math.round(entry.bw * 10) / 10; // keep profile fresh
   });
-  draft = null; toast('Check-in saved'); setTab('week');
+  draft = null; toast(`${partLabel} check-in saved`); setTab('week');
 }
 
 // ================= PROGRESS =================
@@ -1331,7 +1364,7 @@ function renderHistory() {
 
   viewEl.innerHTML = summary + groupsHTML;
   viewEl.querySelectorAll('[data-session]').forEach((el) => el.addEventListener('click', () => sessionDetail(el.dataset.session)));
-  viewEl.querySelectorAll('[data-journal]').forEach((el) => el.addEventListener('click', () => openJournal(el.dataset.journal)));
+  viewEl.querySelectorAll('[data-journal]').forEach((el) => el.addEventListener('click', () => openCheckin(el.dataset.journal, 'morning')));
 }
 
 function journalHistoryItem(date, j) {
@@ -1676,11 +1709,11 @@ function exportTrainingCSV() {
 function exportJournalCSV() {
   const j = get().journal;
   const u = bwUnit();
-  const headers = ['date', 'bodyweight_kg', `bodyweight_${u}`, 'sleep_difficulty', 'drinks', 'energy', 'soreness', 'stress', 'pre_sleep_activity', 'notes'];
+  const headers = ['date', 'bodyweight_kg', `bodyweight_${u}`, 'sleep_difficulty', 'drinks', 'energy', 'soreness', 'stress', 'pre_sleep_activity', 'sleep_notes', 'notes'];
   const rows = Object.keys(j).sort().map((d) => {
     const e = j[d];
     return [d, e.bw != null ? Math.round(e.bw * 10) / 10 : '', e.bw != null ? Math.round(fromKg(e.bw, u) * 10) / 10 : '',
-      e.sleepDiff ?? '', e.drinks ?? '', e.energy ?? '', e.soreness ?? '', e.stress ?? '', e.preSleep || '', e.notes || ''];
+      e.sleepDiff ?? '', e.drinks ?? '', e.energy ?? '', e.soreness ?? '', e.stress ?? '', e.preSleep || '', e.amNote || '', e.notes || ''];
   });
   if (!rows.length) { toast('No check-ins to export'); return; }
   downloadFile(toCSV(headers, rows), `concurrent-trainer-journal-${todayISO()}.csv`, 'text/csv');

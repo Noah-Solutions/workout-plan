@@ -25,11 +25,13 @@ week against the targets and **auto-adjusts your next session** based on how the
   as bars, a **bodyweight** trend, and a **sleep-difficulty** trend, plus headline tiles for this
   week's volume, best e1RM, and week streak. Charts are hand-rolled SVG — no libraries, fully
   offline, and theme-aware.
-- **Daily check-in (recovery journal)** — a quick per-day log for **bodyweight**, **sleep
-  difficulty** (1 easy – 5 hard), **alcohol drinks**, optional **energy / soreness / stress**
-  ratings, **pre-sleep activity**, and free-form notes. One tap from the home screen or the Log
-  menu, editable from History, and surfaced as trends on Progress — so you can correlate recovery
-  with how your training actually goes.
+- **Daily check-ins (recovery journal)** — split into two moments that share one daily record:
+  a **🌅 morning** check-in for last night's **sleep difficulty** (1 easy – 5 hard), the **morning
+  weigh-in**, waking **energy** and **soreness**; and a **🌙 evening** check-in for **alcohol
+  drinks**, **stress**, **pre-sleep activity** and notes on the day. Each is one tap from the home
+  screen (independent ✓ status) or the Log menu, with a Morning/Evening toggle to flip between them,
+  editable from History, and surfaced as trends on Progress — so you can correlate recovery with how
+  your training actually goes.
 - **Exercise detail** — tap any lift (from Progress or a History session) to drill into its own
   page: estimated-1RM trend, working-weight trend, per-session volume, best-ever tiles, the next
   auto-progression target, and a full session-by-session log.

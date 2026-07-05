@@ -441,6 +441,19 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .ratebtn.is-sel { background: var(--accent); border-color: var(--accent); color: #fff; }
 .rating__ends { display: flex; justify-content: space-between; margin-top: 6px; font-size: 0.72rem; color: var(--muted); }
 
+/* even two-up segmented toggle (Morning / Evening) */
+.seg--even { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; overflow: visible; }
+.seg--even .segbtn { text-align: center; padding: 9px 0; }
+
+/* daily check-in rows on the home dashboard */
+.checkin-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); }
+.checkin-row:first-of-type { border-top: 0; }
+.checkin-row__ico { font-size: 1.35rem; flex: none; }
+.checkin-row__body { flex: 1; min-width: 0; }
+.checkin-row__t { font-weight: 600; font-size: 0.9rem; }
+.checkin-row .btn { width: auto; flex: none; }
+.checkin-tick { color: var(--good); font-weight: 700; margin-left: 2px; }
+
 /* chart */
 .chart { position: relative; margin-top: 4px; }
 .chart svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
