@@ -13,16 +13,26 @@ week against the targets and **auto-adjusts your next session** based on how the
 
 ## Features
 
+- **Daily readiness score** — a 0–100 home-screen tile averaging whatever recovery signals you've
+  logged (sleep quality & duration, yesterday's alcohol and stress, waking energy, soreness, and
+  resting HR vs. your 28-day baseline) into a plain-language call: *Primed / Good to go / Take it
+  steady / Recovery day*, with the weakest signal called out. It appears once ≥2 signals exist,
+  tap-through shows the full per-signal breakdown, and it's deliberately directional — an average
+  of your own reports, not a medical score.
+- **Consistency at a glance** — a GitHub-style **12-week training heatmap** on Progress (lift /
+  cardio / both per day) and a **check-in streak** counter on the home card, because gap-spotting
+  is the cheapest motivation there is.
 - **This Week dashboard** — live progress toward the plan's weekly targets:
   - Zone 2 minutes (target ~120–150/wk), one interval session, each movement pattern hit ~2×.
   - **Hard-set volume per muscle** (a set counts when RIR ≤ 3), with a maintenance-floor marker
     (default 4 sets) and a growth target (default 10 sets).
   - **Minimum viable week** banner: 2 full-body lifts hitting squat/hinge/push/pull + ~75 min cardio.
   - **Progression queue** — exercises ready to move up, computed from your logs.
-  - **Protein** target (g/kg × bodyweight) with a daily quick-logger.
+  - **Protein** target (g/kg × bodyweight) with a daily quick-logger (+10/20/30/40 g per meal, or
+    set the day's total).
 - **Progress charts** — a dedicated tab that turns your log into trends: per-lift **estimated 1RM**
   over time (line), **weekly training volume** and **weekly cardio minutes** (Zone 2 vs intervals)
-  as bars, a **bodyweight** trend, and a **sleep-difficulty** trend, plus headline tiles for this
+  as bars, **bodyweight**, **waist** and **sleep-difficulty** trends, plus headline tiles for this
   week's volume, best e1RM, and week streak. Charts are hand-rolled SVG — no libraries, fully
   offline, and theme-aware.
 - **Daily check-ins (recovery journal)** — split into two moments that share one daily record:
@@ -38,8 +48,9 @@ week against the targets and **auto-adjusts your next session** based on how the
 - **Exercise detail** — tap any lift (from Progress or a History session) to drill into its own
   page: estimated-1RM trend, working-weight trend, per-session volume, best-ever tiles, the next
   auto-progression target, and a full session-by-session log.
-- **Recovery view (Fitbit-ready)** — a drill-down that blends your check-in data into sleep, alcohol
-  and readiness trends plus a set of conservative, directional insights: **training load
+- **Recovery view (Fitbit-ready)** — a drill-down with the full readiness breakdown and sleep
+  difficulty, **sleep duration** and **resting heart rate** charts (RHR annotated with your 28-day
+  baseline), alcohol totals, plus a set of conservative, directional insights: **training load
   (acute:chronic workload ratio)** to flag load spikes and detraining dips, **sleep vs training**
   (volume after easy vs. hard sleep), **alcohol vs next-morning sleep**, **soreness after lifting
   vs. rest days**, and **protein adherence vs. bodyweight** over the last 4 weeks. Recovery reads
@@ -61,9 +72,11 @@ week against the targets and **auto-adjusts your next session** based on how the
   record **start/finish timestamps** and every **planned set** (missed sets are kept as 0-rep rows),
   so compliance and time-of-day effects are analyzable later.
 - **Editable history** — any saved session can be **edited** (fix a typo'd weight, wrong duration)
-  or deleted from History. Historical entries keep a snapshot of the exercise (name, muscles,
-  pattern, unit) taken at save time, so renaming or re-tagging an exercise never rewrites past
-  weeks' stats. Corrections don't touch your current progression targets.
+  or deleted from History, and deletions offer a 6-second **Undo** (safe even if the deletion
+  already synced — restores outlive their tombstone). Historical entries keep a snapshot of the
+  exercise (name, muscles, pattern, unit) taken at save time, so renaming or re-tagging an
+  exercise never rewrites past weeks' stats. Corrections don't touch your current progression
+  targets.
 - **Auto-progression & deload** — on success the next target goes up automatically (+5 lb upper,
   +10 lb lower; **double** if you tagged it Easy). Miss the reps and it holds; miss the same lift
   **3 sessions in a row and it deloads 10%**. Weights are in **lbs**, rounded to loadable plates.

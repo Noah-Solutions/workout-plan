@@ -236,8 +236,11 @@ export function mergeRemote(remote) {
     return [...out.values()];
   };
 
+  // A tombstone only kills a session that hasn't been touched SINCE the
+  // deletion — so an undo (which bumps updatedAt past the tombstone) survives
+  // even when the deletion already reached the server.
   s.sessions = mergeById(s.sessions, remote.sessions, 'updatedAt')
-    .filter((x) => !del[x.id])
+    .filter((x) => !(del[x.id] && ts(del[x.id]) >= ts(x.updatedAt)))
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1
       : (a.startedAt || a.loggedAt || '') < (b.startedAt || b.loggedAt || '') ? -1 : 1));
   s.exercises = mergeById(s.exercises, remote.exercises, '_u');

@@ -55,6 +55,66 @@ export function dailyRecovery(date) {
   return out;
 }
 
+function addDays(iso, n) {
+  const d = new Date(iso + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// Median resting HR over the 28 days before `date` (self-reported or device).
+// Needs >= 5 readings to be a usable baseline.
+export function rhrBaseline(date) {
+  const from = addDays(date, -28);
+  const vals = recoveryDates()
+    .filter((d) => d >= from && d < date)
+    .map((d) => dailyRecovery(d).restingHR)
+    .filter((v) => v != null)
+    .sort((a, b) => a - b);
+  if (vals.length < 5) return null;
+  return vals[Math.floor(vals.length / 2)];
+}
+
+const clamp100 = (v) => Math.max(0, Math.min(100, Math.round(v)));
+
+// 0–100 readiness for a date, averaged over whatever signals exist:
+//   sleep (score and/or duration), yesterday's alcohol & evening stress,
+//   waking energy & soreness, and resting HR vs the 28-day baseline.
+// Returns null until at least two signals are available — a one-signal
+// "score" would be noise dressed up as a number. Directional, not medical.
+export function readiness(date) {
+  const r = dailyRecovery(date);
+  const ry = dailyRecovery(addDays(date, -1));
+  const parts = [];
+
+  let sleep = r.sleepScore;
+  if (r.sleepMinutes != null) {
+    const dur = clamp100(((r.sleepMinutes - 300) / 180) * 100); // 5h -> 0, 8h+ -> 100
+    sleep = sleep == null ? dur : Math.round((sleep + dur) / 2);
+  }
+  if (sleep != null) parts.push({ key: 'sleep', label: 'Sleep', score: sleep });
+  if (ry.drinks != null) {
+    const a = ry.drinks <= 0 ? 100 : ry.drinks === 1 ? 85 : ry.drinks === 2 ? 65 : ry.drinks === 3 ? 45 : 25;
+    parts.push({ key: 'alcohol', label: 'Alcohol (yesterday)', score: a });
+  }
+  if (r.energy) parts.push({ key: 'energy', label: 'Energy', score: clamp100(((r.energy - 1) / 4) * 100) });
+  if (r.soreness) parts.push({ key: 'soreness', label: 'Soreness', score: clamp100(((5 - r.soreness) / 4) * 100) });
+  if (ry.stress) parts.push({ key: 'stress', label: 'Stress (yesterday)', score: clamp100(((5 - ry.stress) / 4) * 100) });
+  if (r.restingHR != null) {
+    const base = rhrBaseline(date);
+    if (base != null) {
+      // at baseline -> 100; each bpm above baseline costs 8 points
+      parts.push({ key: 'rhr', label: 'Resting HR', score: clamp100(100 - (r.restingHR - base) * 8) });
+    }
+  }
+
+  if (parts.length < 2) return null;
+  const score = Math.round(parts.reduce((a, p) => a + p.score, 0) / parts.length);
+  const band = score >= 75 ? 'high' : score >= 55 ? 'good' : score >= 40 ? 'medium' : 'low';
+  parts.sort((a, b) => a.score - b.score);
+  return { date, score, band, parts, weakest: parts[0] };
+}
+
 // Whether any measured (device) recovery data exists yet — drives the
 // "connect Fitbit" prompt vs. a live device summary.
 export function hasDeviceData() {

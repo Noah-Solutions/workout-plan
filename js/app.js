@@ -11,7 +11,7 @@ import { suggestNext, commitExerciseState, fmtWeight, lastPerformance, guidedTar
 import { TEMPLATES } from './templates.js';
 import { platesLabel, platesFor } from './plates.js';
 import { lineChart, barChart, legend, mountTips } from './charts.js';
-import { dailyRecovery, difficultyToScore, hasDeviceData, recoveryDates } from './recovery.js';
+import { dailyRecovery, difficultyToScore, hasDeviceData, recoveryDates, readiness, rhrBaseline } from './recovery.js';
 import * as store from './store.js';
 import * as sync from './sync.js';
 import * as timer from './timer.js';
@@ -63,6 +63,18 @@ function toast(msg) {
   t.textContent = msg;
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 1800);
+}
+// Toast with a single action button (e.g. Undo). Longer-lived than a plain toast.
+function toastAction(msg, actionLabel, fn) {
+  const t = document.createElement('div');
+  t.className = 'toast toast--action';
+  t.textContent = msg + ' ';
+  const b = document.createElement('button');
+  b.textContent = actionLabel;
+  b.addEventListener('click', () => { t.remove(); fn(); });
+  t.appendChild(b);
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 6000);
 }
 function haptic(ms) { if (navigator.vibrate) { try { navigator.vibrate(ms || 12); } catch (e) {} } }
 
@@ -231,6 +243,7 @@ function renderWeek() {
 
   viewEl.innerHTML = h`
     ${nextWorkoutHeroHTML()}
+    ${readinessCardHTML()}
     <div class="card">${rings}</div>
     ${mvwCard}
 
@@ -269,6 +282,8 @@ function renderWeek() {
   document.getElementById('addProtein').addEventListener('click', proteinPrompt);
   const nudgeBtn = document.getElementById('nudgeExport');
   if (nudgeBtn) nudgeBtn.addEventListener('click', () => { doExport(); renderWeek(); });
+  const rdCard = document.getElementById('readinessCard');
+  if (rdCard) rdCard.addEventListener('click', openRecoveryDetail);
   viewEl.querySelectorAll('[data-checkin]').forEach((b) => b.addEventListener('click', () => openCheckin(todayISO(), b.dataset.checkin)));
   const startBtn = document.getElementById('heroStart');
   if (startBtn) startBtn.addEventListener('click', () => startWorkout(nextTemplate()));
@@ -309,10 +324,47 @@ function nextWorkoutHeroHTML() {
   </div>`;
 }
 
+// ---- readiness (from recovery.js) shown as a home tile ----
+const READINESS_BAND = {
+  high:   { label: 'Primed',        color: 'var(--good)',   tip: 'Green light — a great day to push.' },
+  good:   { label: 'Good to go',    color: 'var(--accent)', tip: 'Train as planned.' },
+  medium: { label: 'Take it steady', color: 'var(--warn)',  tip: 'Go, but keep reps in reserve — or make it Zone 2.' },
+  low:    { label: 'Recovery day',  color: 'var(--danger)', tip: 'Favor rest or easy Zone 2 — hard lifting today buys fatigue, not fitness.' },
+};
+
+function readinessCardHTML() {
+  const rd = readiness(todayISO());
+  if (!rd) return ''; // needs >= 2 signals; the check-in card already prompts for them
+  const b = READINESS_BAND[rd.band];
+  return h`<div class="card" id="readinessCard" style="cursor:pointer">
+    <div class="readiness">
+      ${ring(rd.score / 100, 'Readiness', `${rd.score}`, '', b.color)}
+      <div class="readiness__body">
+        <b style="color:${b.color}">${b.label}</b>
+        <div class="small muted">${b.tip}</div>
+        ${rd.weakest.score < 60 ? `<div class="small muted mt">Weakest signal: <b>${esc(rd.weakest.label)}</b></div>` : ''}
+      </div>
+      <span class="hist-item__chev">›</span>
+    </div>
+  </div>`;
+}
+
+// consecutive days (ending today or yesterday) with any check-in logged
+function checkinStreak() {
+  const j = get().journal;
+  const logged = (d) => morningDone(j[d]) || eveningDone(j[d]);
+  let d = todayISO();
+  if (!logged(d)) d = addDaysISO(d, -1);
+  let n = 0;
+  while (logged(d)) { n++; d = addDaysISO(d, -1); }
+  return n;
+}
+
 // "Daily check-ins" quick card on the home dashboard: morning + evening rows.
 function checkinCardHTML() {
   const j = get().journal[todayISO()];
   const mDone = morningDone(j), eDone = eveningDone(j);
+  const streak = checkinStreak();
   const mStatus = mDone
     ? [j.sleepMin != null ? fmtSleepMin(j.sleepMin) : null, j.sleepDiff ? `Sleep ${j.sleepDiff}/5` : null, j.bw != null ? fmtBw(j.bw) : null].filter(Boolean).join(' · ') || 'Logged'
     : "Last night's sleep";
@@ -320,7 +372,7 @@ function checkinCardHTML() {
     ? [j.drinks != null ? `${j.drinks} drink${j.drinks === 1 ? '' : 's'}` : null, j.stress ? `stress ${j.stress}/5` : null].filter(Boolean).join(' · ') || 'Logged'
     : 'How the day went';
   return h`<div class="card">
-    <div class="card__title"><h2>Daily check-ins</h2><span class="card__hint">recovery journal</span></div>
+    <div class="card__title"><h2>Daily check-ins</h2><span class="card__hint">${streak >= 2 ? `🔥 ${streak}-day streak` : 'recovery journal'}</span></div>
     <div class="checkin-row">
       <span class="checkin-row__ico">🌅</span>
       <div class="checkin-row__body"><div class="checkin-row__t">Morning ${mDone ? '<span class="checkin-tick">✓</span>' : ''}</div><div class="small muted">${esc(mStatus)}</div></div>
@@ -354,11 +406,21 @@ function backupNudgeHTML() {
 
 function proteinPrompt() {
   const cur = get().proteinLog[todayISO()] || 0;
+  const target = proteinTarget();
   openModal('Protein today (g)', h`
+    <div class="small muted" style="margin-bottom:8px">Quick-add a meal, or set the day's total. Target: <b>${target} g</b>.</div>
+    <div class="btn-row mb">
+      ${[10, 20, 30, 40].map((g) => `<button class="btn btn--sm" data-padd="${g}">＋${g}g</button>`).join('')}
+    </div>
     <label class="field"><span>Total protein consumed today</span>
       <input type="number" id="pval" inputmode="numeric" value="${cur}" /></label>
     <button class="btn btn--primary" id="psave">Save</button>
   `);
+  modalRoot.querySelectorAll('[data-padd]').forEach((b) => b.addEventListener('click', () => {
+    const el = document.getElementById('pval');
+    el.value = Math.max(0, (Number(el.value) || 0) + Number(b.dataset.padd));
+    haptic(8);
+  }));
   document.getElementById('psave').addEventListener('click', () => {
     const v = Math.max(0, Number(document.getElementById('pval').value) || 0);
     update((s) => { s.proteinLog[todayISO()] = v; });
@@ -1321,6 +1383,20 @@ function renderProgress() {
     </div>`;
   }
 
+  // ---- waist trend (line, from journal measurements) ----
+  const waistDates = Object.keys(journal).filter((d) => journal[d].waist != null).sort();
+  let waistCard = '';
+  if (waistDates.length >= 2) {
+    const wu = waistUnit();
+    const wPts = waistDates.map((d) => ({ t: fmtShort(d), full: fmtDate(d), v: Math.round(waistFromCm(journal[d].waist) * 10) / 10 }));
+    const wchg = Math.round((wPts[wPts.length - 1].v - wPts[0].v) * 10) / 10;
+    waistCard = h`<div class="card">
+      <div class="card__title"><h2>Waist</h2><span class="card__hint">${wchg >= 0 ? '+' : ''}${wchg} ${wu} · ${wPts.length} measurements</span></div>
+      ${lineChart(wPts, { yFmt: (v) => String(v), valFmt: (v) => `${v} ${wu}`, color: '--chart-1' })}
+      <div class="small muted mt">Read with bodyweight: weight up + waist flat skews muscle; both down = fat loss.</div>
+    </div>`;
+  }
+
   // ---- recovery: weekly avg sleep difficulty (line, weeks with data) ----
   const sleepPts = weeks8.map((w) => {
     const vals = Object.keys(journal).filter((d) => d >= w.startISO && d <= w.endISO && journal[d].sleepDiff)
@@ -1336,7 +1412,7 @@ function renderProgress() {
     ${anyRecovery ? `<div class="row-between mt"><span></span><button class="linkbtn" data-recovery>Recovery details →</button></div>` : ''}
   </div>`;
 
-  viewEl.innerHTML = stats + strengthCard + bwCard + volCard + cardioCard + recoveryCard;
+  viewEl.innerHTML = stats + consistencyCard() + strengthCard + bwCard + waistCard + volCard + cardioCard + recoveryCard;
 
   viewEl.querySelectorAll('[data-ex]').forEach((b) => b.addEventListener('click', () => {
     progressSel = b.dataset.ex; renderProgress();
@@ -1350,6 +1426,46 @@ function renderProgress() {
 // short date for chart x-axis, e.g. "Jul 5"
 function fmtShort(iso) {
   return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+// ---- 12-week consistency heatmap (GitHub-style, columns = weeks) ----
+// Seeing gaps at a glance is the cheapest consistency motivator there is.
+function consistencyCard() {
+  const s = get();
+  const weeks = lastNWeeks(12);
+  if (!s.sessions.length) return '';
+  // date -> { lift, cardio }
+  const byDate = {};
+  s.sessions.forEach((x) => {
+    const rec = (byDate[x.date] = byDate[x.date] || { lift: false, cardio: false });
+    if (x.kind === 'strength') rec.lift = true; else rec.cardio = true;
+  });
+  const today = todayISO();
+  const cells = [];
+  weeks.forEach((w) => {
+    for (let dow = 0; dow < 7; dow++) {
+      const d = addDaysISO(w.startISO, dow);
+      const r = byDate[d];
+      const future = d > today;
+      const color = future ? 'transparent'
+        : r && r.lift && r.cardio ? 'var(--good)'
+        : r && r.lift ? 'var(--chart-1)'
+        : r && r.cardio ? 'var(--chart-2)'
+        : 'var(--card-2)';
+      const what = r ? [r.lift ? 'lift' : '', r.cardio ? 'cardio' : ''].filter(Boolean).join(' + ') : 'rest';
+      cells.push(`<span class="heat__cell" style="background:${color}" title="${esc(fmtDate(d))} · ${what}"></span>`);
+    }
+  });
+  const active = Object.keys(byDate).filter((d) => d >= weeks[0].startISO).length;
+  return h`<div class="card">
+    <div class="card__title"><h2>Consistency</h2><span class="card__hint">${active} active days · 12 wks</span></div>
+    <div class="heat">${cells.join('')}</div>
+    <div class="chart__legend">
+      <span class="chart__key"><span class="chart__swatch" style="background:var(--chart-1)"></span>Lift</span>
+      <span class="chart__key"><span class="chart__swatch" style="background:var(--chart-2)"></span>Cardio</span>
+      <span class="chart__key"><span class="chart__swatch" style="background:var(--good)"></span>Both</span>
+    </div>
+  </div>`;
 }
 
 function detailBackBar(label) {
@@ -1463,12 +1579,48 @@ function renderRecoveryDetail() {
     };
   });
 
+  // today's readiness with the per-signal breakdown
+  const rd = readiness(todayISO());
+  const rdCard = rd ? h`<div class="card">
+    <div class="card__title"><h2>Readiness today</h2><span class="card__hint">${rd.parts.length} signals</span></div>
+    <div class="readiness">
+      ${ring(rd.score / 100, 'Score', `${rd.score}`, '', READINESS_BAND[rd.band].color)}
+      <div class="readiness__body">
+        <b style="color:${READINESS_BAND[rd.band].color}">${READINESS_BAND[rd.band].label}</b>
+        <div class="small muted">${READINESS_BAND[rd.band].tip}</div>
+      </div>
+    </div>
+    ${rd.parts.map((p) => h`<div class="rd-row"><span>${esc(p.label)}</span><b>${p.score}</b></div>`).join('')}
+    <p class="small muted mt">Average of the signals you logged — directional, not a medical score.</p>
+  </div>` : '';
+
   const sleepPts = weekAgg.filter((x) => x.sleep != null).map((x) => ({ t: x.w.label, full: `Week of ${x.w.label}`, v: Math.round(x.sleep * 10) / 10 }));
   const sleepCard = h`<div class="card">
     <div class="card__title"><h2>Sleep difficulty</h2><span class="card__hint">weekly avg · 1 easy–5 hard</span></div>
     ${sleepPts.length >= 2 ? lineChart(sleepPts, { yFmt: String, valFmt: (v) => `${v}/5`, color: '--chart-1' })
       : '<div class="chart-empty">A few more nights of check-ins will fill this in.</div>'}
   </div>`;
+
+  // sleep duration: weekly average of bed/wake-derived (or device) minutes
+  const durAgg = weeks8.map((w) => {
+    const vals = dates.filter((d) => d >= w.startISO && d <= w.endISO)
+      .map((d) => dailyRecovery(d).sleepMinutes).filter((v) => v != null);
+    return vals.length ? { t: w.label, full: `Week of ${w.label}`, v: Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) } : null;
+  }).filter(Boolean);
+  const sleepDurCard = durAgg.length >= 2 ? h`<div class="card">
+    <div class="card__title"><h2>Sleep duration</h2><span class="card__hint">weekly avg</span></div>
+    ${lineChart(durAgg, { yFmt: (v) => `${Math.round(v / 60)}h`, valFmt: fmtSleepMin, color: '--chart-2' })}
+  </div>` : '';
+
+  // resting HR: daily line (last 30 readings) + baseline note
+  const rhrPts = dates.map((d) => ({ d, v: dailyRecovery(d).restingHR })).filter((x) => x.v != null).slice(-30)
+    .map((x) => ({ t: fmtShort(x.d), full: fmtDate(x.d), v: x.v }));
+  const base = rhrBaseline(todayISO());
+  const rhrCard = rhrPts.length >= 2 ? h`<div class="card">
+    <div class="card__title"><h2>Resting heart rate</h2><span class="card__hint">${base != null ? `baseline ${base} bpm` : 'bpm'}</span></div>
+    ${lineChart(rhrPts, { yFmt: String, valFmt: (v) => `${v} bpm`, color: '--chart-1' })}
+    <div class="small muted mt">A morning RHR well above your baseline often precedes illness or under-recovery.</div>
+  </div>` : '';
 
   const drinkGroups = weekAgg.map((x) => ({ label: x.w.label, full: `Week of ${x.w.label}`, total: x.drinks, segs: [{ key: 'd', v: x.drinks }] }));
   const drinkCard = h`<div class="card">
@@ -1477,10 +1629,10 @@ function renderRecoveryDetail() {
       : '<div class="chart-empty">No drinks logged yet.</div>'}
   </div>`;
 
-  // readiness: latest values + short trend, when present
+  // latest raw self-ratings, when present
   const latest = dates.length ? dailyRecovery(dates[dates.length - 1]) : null;
-  const readiness = latest && (latest.energy || latest.soreness || latest.stress) ? h`<div class="card">
-    <div class="card__title"><h2>Readiness</h2><span class="card__hint">latest · ${esc(fmtDate(latest.date))}</span></div>
+  const latestCard = latest && (latest.energy || latest.soreness || latest.stress) ? h`<div class="card">
+    <div class="card__title"><h2>Self-ratings</h2><span class="card__hint">latest · ${esc(fmtDate(latest.date))}</span></div>
     <div class="rd-row"><span>Energy</span><b>${latest.energy ? latest.energy + '/5' : '—'}</b></div>
     <div class="rd-row"><span>Soreness</span><b>${latest.soreness ? latest.soreness + '/5' : '—'}</b></div>
     <div class="rd-row"><span>Stress</span><b>${latest.stress ? latest.stress + '/5' : '—'}</b></div>
@@ -1503,8 +1655,8 @@ function renderRecoveryDetail() {
     <button class="btn btn--sm" id="fitbitSoon" disabled>Connect Fitbit (soon)</button>
   </div>`;
 
-  viewEl.innerHTML = detailBackBar('Progress') + load + sleepCard + drinkCard + readiness
-    + insight + alcohol + sorenessCard + proteinCard + device;
+  viewEl.innerHTML = detailBackBar('Progress') + rdCard + load + sleepCard + sleepDurCard + rhrCard
+    + drinkCard + latestCard + insight + alcohol + sorenessCard + proteinCard + device;
   viewEl.querySelector('[data-back]').addEventListener('click', () => { recoveryDetail = false; render(); });
   mountTips(viewEl);
 }
@@ -1790,11 +1942,22 @@ function sessionDetail(id) {
   `);
   document.getElementById('detEdit').addEventListener('click', () => { closeModal(); editSession(s); });
   document.getElementById('detDel').addEventListener('click', () => {
+    const removed = s;
     update((st) => {
       st.sessions = st.sessions.filter((x) => x.id !== id);
       st.deleted[id] = new Date().toISOString(); // tombstone so sync propagates the deletion
     });
-    closeModal(); toast('Deleted'); renderHistory();
+    closeModal(); renderHistory();
+    toastAction('Session deleted', 'Undo', () => {
+      update((st) => {
+        st.sessions.push(removed);
+        st.sessions.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+        delete st.deleted[id];
+        removed.updatedAt = new Date().toISOString(); // outlive the tombstone on other devices
+      });
+      if (currentTab === 'history') renderHistory(); else render();
+      toast('Restored');
+    });
   });
   modalRoot.querySelectorAll('[data-exdetail]').forEach((el) => el.addEventListener('click', () => {
     closeModal(); openExerciseDetail(el.dataset.exdetail);
