@@ -327,7 +327,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .wex__scheme { margin-top: 6px; }
 
 /* Set circles */
-.setdots { display: flex; flex-wrap: wrap; gap: 12px; margin: 14px 0 4px; }
+.setdots { display: flex; flex-wrap: wrap; gap: 12px; margin: 14px 0 4px; align-items: flex-start; }
+.setcol { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.setcol__wt { font-size: 0.68rem; color: var(--muted); font-weight: 700; font-variant-numeric: tabular-nums; }
+.setcol__wt.is-top { color: var(--text); }
 .setdot {
   width: 54px; height: 54px; border-radius: 50%;
   border: 2px solid var(--line); background: var(--card-2); color: var(--muted);

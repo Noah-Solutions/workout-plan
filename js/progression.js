@@ -133,24 +133,54 @@ export function guidedTarget(ex) {
   };
 }
 
+// Per-set weight/rep pyramid ramping up to the top set (= targetWeight).
+// Modeled on how established programs ramp:
+//   - fixed-rep strength lifts (e.g. 5x5) use Madcow 5x5's scheme: equal 12.5%
+//     jumps ending at the top set (5 sets -> 50/62.5/75/87.5/100%),
+//   - wide-rep-range accessories use a classic ascending pyramid: 10% jumps
+//     with reps sliding from the top of the range down to the bottom
+//     (e.g. 8-12 over 3 sets -> 80%x12 / 90%x10 / 100%x8).
+// Bodyweight, timed, and single-set lifts stay flat (the warm-up ramp covers those).
+export function pyramidSets(ex, topWeight) {
+  const t = guidedTarget(ex);
+  const n = t.sets;
+  const top = topWeight != null ? topWeight : t.weight;
+  const flat = () => Array.from({ length: n }, () => ({ weight: top, reps: t.reps }));
+  if (ex.unit === 'bw' || ex.unit === 'sec' || n <= 1 || !top) return flat();
+
+  const [lo, hi] = ex.repRange || [t.reps, t.reps];
+  const strength = hi - lo <= 1;            // 5x5-style: same reps every set
+  const step = strength ? 0.125 : 0.10;     // Madcow interval vs pyramid interval
+  const sets = [];
+  for (let i = 0; i < n; i++) {
+    const pct = 1 - step * (n - 1 - i);
+    const reps = strength ? t.reps : Math.round(hi - (hi - lo) * (i / (n - 1)));
+    sets.push({ weight: i === n - 1 ? top : Math.max(0, roundToStep(top * pct, ex.unit)), reps });
+  }
+  return sets;
+}
+
 const DIFFICULTY = ['easy', 'good', 'hard', 'failed'];
 
 // Apply the result of a completed exercise to its progression state, mutating the
 // exercise in place. Returns { outcome, from, to, delta } for the summary.
-//   success  = every work set met the target reps AND difficulty !== 'failed'
-//   success  -> +increment (double if "easy"); reset fail streak
+//   success  = every work set met its target reps AND difficulty !== 'failed'
+//   success  -> top set +increment (double if "easy"); reset fail streak
 //   miss     -> repeat weight; +1 fail streak; at 3 fails -> deload 10% (reset streak)
-export function applyWorkoutResult(ex, sets, difficulty) {
+// With pyramid sets the whole ramp is anchored to the top set, so progression
+// only ever moves the top-set weight (topWeight = the day's planned top set).
+export function applyWorkoutResult(ex, sets, difficulty, topWeight) {
   const tgt = guidedTarget(ex);
   const working = (sets || []).filter((st) => Number(st.reps) > 0);
   const usedWeight = ex.unit === 'bw' || ex.unit === 'sec'
-    ? tgt.weight
-    : (mode(working.map((st) => Number(st.weight) || 0)) || tgt.weight);
+    ? (topWeight != null ? topWeight : tgt.weight)
+    : (topWeight != null ? topWeight
+      : (working.length ? Math.max(...working.map((st) => Number(st.weight) || 0)) : 0) || tgt.weight);
   ex.lastWeight = usedWeight;
 
-  const targetReps = tgt.reps;
   const enough = working.length >= tgt.sets;
-  const allHit = enough && working.every((st) => Number(st.reps) >= targetReps);
+  const allHit = enough && working.every((st) =>
+    Number(st.reps) >= Number(st.target != null ? st.target : tgt.reps));
   const success = allHit && difficulty !== 'failed';
 
   const from = usedWeight;

@@ -7,7 +7,7 @@ import {
   aggregateWeek, weekRange, weekStart, toISODate, fmtWeekLabel, fmtDate, todayISO,
   proteinTarget, ACTIVITY_MAP, isHardSet, entryExercise,
 } from './week.js';
-import { suggestNext, commitExerciseState, fmtWeight, lastPerformance, guidedTarget, applyWorkoutResult, warmupSets } from './progression.js';
+import { suggestNext, commitExerciseState, fmtWeight, lastPerformance, guidedTarget, applyWorkoutResult, warmupSets, pyramidSets } from './progression.js';
 import { TEMPLATES } from './templates.js';
 import { platesLabel, platesFor } from './plates.js';
 import { lineChart, barChart, legend, mountTips } from './charts.js';
@@ -391,10 +391,15 @@ function nextWorkoutHeroHTML() {
     .filter(Boolean);
   const rows = exs.map((ex) => {
     const t = guidedTarget(ex);
+    const ramp = pyramidSets(ex);
+    // pyramid lifts show the rep slide (e.g. 3×12→8) and their TOP-set weight
+    const varies = ramp.length > 1 && ramp[0].reps !== ramp[ramp.length - 1].reps;
+    const scheme = varies ? `${t.sets}×${ramp[0].reps}→${ramp[ramp.length - 1].reps}` : `${t.sets}×${t.reps}`;
+    const ramps = ramp.length > 1 && ramp.some((s) => s.weight !== ramp[0].weight);
     return h`<div class="hero-ex">
       <span class="hero-ex__name">${esc(ex.name)}</span>
-      <span class="hero-ex__scheme">${t.sets}×${t.reps}</span>
-      <span class="hero-ex__wt">${fmtWeight(t.weight, t.unit)}</span>
+      <span class="hero-ex__scheme">${scheme}</span>
+      <span class="hero-ex__wt">${ramps ? '▲ ' : ''}${fmtWeight(t.weight, t.unit)}</span>
     </div>`;
   }).join('');
   return h`<div class="hero">
@@ -567,22 +572,26 @@ function startWorkout(tpl) {
     templateName: tpl.name,
     date: todayISO(),
     startedAt: new Date().toISOString(),
-    exercises: exs.map((ex) => {
-      const t = guidedTarget(ex);
-      return {
-        exerciseId: ex.id,
-        weight: t.weight,
-        targetReps: t.reps,
-        unit: t.unit,
-        sets: Array.from({ length: t.sets }, () => ({ reps: t.reps, done: false })),
-        warmDone: [],   // ephemeral warm-up completion flags (not saved)
-        difficulty: null,
-      };
-    }),
+    exercises: exs.map((ex) => workoutExercise(ex)),
   };
   timer.stop();
   logReturn = null; // a finished/discarded workout always lands on Today
   setTab('log');
+}
+
+// Build the in-progress state for one exercise: weight = TOP set; work sets
+// pyramid up to it (see pyramidSets), each carrying its own weight & rep target.
+function workoutExercise(ex) {
+  const t = guidedTarget(ex);
+  return {
+    exerciseId: ex.id,
+    weight: t.weight,          // top-set weight (what progression moves)
+    targetReps: t.reps,
+    unit: t.unit,
+    sets: pyramidSets(ex).map((ps) => ({ weight: ps.weight, target: ps.reps, reps: ps.reps, done: false })),
+    warmDone: [],   // ephemeral warm-up completion flags (not saved)
+    difficulty: null,
+  };
 }
 
 function renderWorkout() {
@@ -599,16 +608,25 @@ function renderWorkout() {
     const ex = exerciseById(w.exerciseId) || { name: '?', unit: w.unit };
     const isBar = w.unit !== 'bw' && w.unit !== 'sec';
 
-    // warm-up ramp (barbell only) — ephemeral guidance
-    const warm = isBar ? warmupSets(w.weight, bar) : [];
+    // pyramid: does this lift ramp across its work sets?
+    const ramps = isBar && w.sets.length > 1 && w.sets.some((s) => s.weight !== w.sets[0].weight);
+
+    // warm-up ramp (barbell only) — ephemeral guidance. When the work sets
+    // themselves pyramid, they do most of the warming up, so ramp only to the
+    // FIRST work set (usually collapses to just the empty bar).
+    const warm = isBar ? warmupSets(ramps ? w.sets[0].weight : w.weight, bar) : [];
     const warmHTML = warm.length ? h`<div class="warmup">
         <span class="warmup__label">Warm-up</span>
         <div class="warmup__dots">${warm.map((ws, i) => h`<button class="warmdot ${w.warmDone[i] ? 'is-done' : ''}" data-warm="${wi}:${i}">
           <b>${ws.weight}</b><small>×${ws.reps}</small></button>`).join('')}</div>
       </div>` : '';
 
-    const setCircles = w.sets.map((st, si) => h`<button class="setdot ${st.done ? 'is-done' : ''} ${st.done && st.reps < w.targetReps ? 'is-miss' : ''}"
-        data-set="${wi}:${si}">${st.done ? st.reps : (w.unit === 'sec' ? '⏱' : w.targetReps)}</button>`).join('');
+    const setCircles = w.sets.map((st, si) => {
+      const tr = st.target != null ? st.target : w.targetReps;
+      const dot = h`<button class="setdot ${st.done ? 'is-done' : ''} ${st.done && st.reps < tr ? 'is-miss' : ''}"
+        data-set="${wi}:${si}">${st.done ? st.reps : (w.unit === 'sec' ? '⏱' : tr)}</button>`;
+      return isBar ? h`<div class="setcol">${dot}<span class="setcol__wt ${si === w.sets.length - 1 ? 'is-top' : ''}">${st.weight}</span></div>` : dot;
+    }).join('');
     const allDone = w.sets.every((s) => s.done);
     const diffSel = ['easy', 'good', 'hard', 'failed'].map((d) => h`<button class="diffbtn ${w.difficulty === d ? 'is-sel diff--' + d : ''}" data-diff="${wi}:${d}">${diffLabel(d)}</button>`).join('');
     return h`<div class="wex ${allDone && w.difficulty ? 'is-complete' : ''}">
@@ -620,7 +638,9 @@ function renderWorkout() {
       </div>
       ${isBar ? plateVizHTML(w.weight) : ''}
       ${warmHTML}
-      <div class="wex__scheme muted small">${w.sets.length} × ${w.targetReps}${w.unit === 'sec' ? 's' : ' reps'} · tap a set, tap again if you missed reps</div>
+      <div class="wex__scheme muted small">${ramps
+        ? `Pyramid up to ${fmtWeight(w.weight, w.unit)} · tap a set, tap again if you missed reps`
+        : `${w.sets.length} × ${w.targetReps}${w.unit === 'sec' ? 's' : ' reps'} · tap a set, tap again if you missed reps`}</div>
       <div class="setdots">${setCircles}</div>
       <div class="wex__diff ${allDone ? '' : 'is-dim'}">
         <span class="wex__diff-label">How hard?</span>
@@ -644,11 +664,11 @@ function renderWorkout() {
     <div style="height:64px"></div>
   `;
 
-  // set circle tap: cycle done@targetReps -> done@reps-1 -> ... -> done@0 -> not done
+  // set circle tap: cycle done@target -> done@reps-1 -> ... -> done@0 -> not done
   viewEl.querySelectorAll('[data-set]').forEach((b) => b.addEventListener('click', () => {
     const [wi, si] = b.dataset.set.split(':').map(Number);
     const st = workout.exercises[wi].sets[si];
-    const tr = workout.exercises[wi].targetReps;
+    const tr = st.target != null ? st.target : workout.exercises[wi].targetReps;
     if (!st.done) { st.done = true; st.reps = tr; timer.start(); haptic(15); }
     else if (st.reps > 0) { st.reps -= 1; haptic(8); }
     else { st.done = false; st.reps = tr; }
@@ -665,6 +685,14 @@ function renderWorkout() {
     const w = workout.exercises[wi];
     const step = 5;
     w.weight = Math.max(0, Math.round((w.weight + (dir === '+' ? step : -step)) / 2.5) * 2.5);
+    // the stepper moves the TOP set; re-anchor the whole pyramid to it
+    const ex = exerciseById(w.exerciseId);
+    if (ex) {
+      const ramp = pyramidSets(ex, w.weight);
+      w.sets.forEach((st, i) => { if (ramp[i]) st.weight = ramp[i].weight; });
+    } else {
+      w.sets.forEach((st) => { st.weight = w.weight; });
+    }
     renderWorkout();
   }));
   viewEl.querySelectorAll('[data-diff]').forEach((b) => b.addEventListener('click', () => {
@@ -700,9 +728,7 @@ function addExerciseToWorkout() {
   openModal('Add exercise', body);
   modalRoot.querySelectorAll('[data-pick]').forEach((el) => el.addEventListener('click', () => {
     const ex = exerciseById(el.dataset.pick);
-    const t = guidedTarget(ex);
-    workout.exercises.push({ exerciseId: ex.id, weight: t.weight, targetReps: t.reps, unit: t.unit,
-      sets: Array.from({ length: t.sets }, () => ({ reps: t.reps, done: false })), warmDone: [], difficulty: null });
+    workout.exercises.push(workoutExercise(ex));
     closeModal(); renderWorkout();
   }));
 }
@@ -721,16 +747,18 @@ function finishWorkout() {
       const ex = s.exercises.find((e) => e.id === w.exerciseId);
       const rir = w.difficulty != null && DIFF_RIR[w.difficulty] != null ? DIFF_RIR[w.difficulty] : '';
       // keep EVERY planned set — missed ones as reps 0 — so planned-vs-completed
-      // compliance survives into history and the CSV.
+      // compliance survives into history and the CSV. Pyramid sets each carry
+      // their own weight and rep target.
       const sets = w.sets.map((st) => ({
-        weight: w.unit === 'bw' ? 0 : w.weight,
+        weight: w.unit === 'bw' ? 0 : (st.weight != null ? st.weight : w.weight),
+        target: st.target != null ? st.target : w.targetReps,
         reps: st.done ? Number(st.reps) : 0,
         rir: st.done ? rir : '',
         completed: !!st.done,
       }));
       let outcome = null;
       if (ex) {
-        outcome = applyWorkoutResult(ex, sets, w.difficulty);
+        outcome = applyWorkoutResult(ex, sets, w.difficulty, w.unit === 'bw' ? 0 : w.weight);
         ex._u = now; // per-record stamp for merge sync
       }
       if (ex && outcome) summary.push({ name: ex.name, ...outcome, unit: w.unit });
@@ -2443,7 +2471,7 @@ function exportTrainingCSV() {
           const done = st.completed != null ? st.completed : Number(st.reps) > 0;
           rows.push([s.date, s.id, 'strength', s.templateName || '', s.startedAt || s.loggedAt || '',
             ex.name || '?', ex.pattern || '', ex.unit || '',
-            i + 1, en.target ? en.target.reps : '', st.weight ?? '', weightKg(st.weight, ex.unit),
+            i + 1, st.target ?? (en.target ? en.target.reps : ''), st.weight ?? '', weightKg(st.weight, ex.unit),
             st.reps ?? '', done ? 1 : 0, st.rir ?? '', en.difficulty || '', '', '', '', '', '', s.note || '']);
         });
       });

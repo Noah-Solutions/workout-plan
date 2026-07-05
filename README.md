@@ -88,10 +88,15 @@ and you land back on that day view.
   (one row per day joining recovery, training load, cardio minutes and protein — the day-grain
   merge where health correlations live). A gentle home-screen nudge reminds you to back up when
   it's been a month (quiet when cloud sync is on).
-- **Guided workout (StrongLifts-style)** — a "Start workout" flow that shows your exact **target
-  weight** for every lift, a **plate breakdown** per side, and tap-to-complete **set circles** (tap
-  again if you missed reps). A built-in **rest timer** auto-starts after each set with a beep/vibrate
-  when it's up. You rate each lift's **difficulty** (Easy / Good / Hard / Failed) — the rating is
+- **Guided workout (pyramid ramp)** — a "Start workout" flow where work sets **pyramid up to a
+  top set** instead of straight sets across, following how proven programs ramp: fixed-rep
+  strength lifts (5×5) climb in **Madcow-style 12.5% jumps** (≈50 / 62.5 / 75 / 87.5 / 100% of
+  the top set), and wide-rep-range accessories use a **classic ascending pyramid** in ~10% jumps
+  with reps sliding down the range (e.g. 12 → 10 → 8). Each set circle shows its own weight and
+  rep target, the **plate breakdown** per side covers the top set, and adjusting the weight
+  re-anchors the whole ramp. Since the ramp does most of the warming up, the separate warm-up
+  shrinks to the empty bar (single-set lifts like the deadlift keep the full warm-up ramp). A
+  built-in **rest timer** auto-starts after each set with a beep/vibrate when it's up. You rate each lift's **difficulty** (Easy / Good / Hard / Failed) — the rating is
   also stored as an approximate per-set **RIR** so guided sessions keep an effort signal. Sessions
   record **start/finish timestamps** and every **planned set** (missed sets are kept as 0-rep rows),
   so compliance and time-of-day effects are analyzable later.
@@ -104,10 +109,11 @@ and you land back on that day view.
   the exercise (name, muscles, pattern, unit) taken at save time, so renaming or re-tagging an
   exercise never rewrites past weeks' stats. Corrections don't touch your current progression
   targets.
-- **Auto-progression & deload** — on success the next target goes up automatically (+5 lb upper,
-  +10 lb lower; **double** if you tagged it Easy). Miss the reps and it holds; miss the same lift
-  **3 sessions in a row and it deloads 10%**. Weights are in **lbs**, rounded to loadable plates.
-  A "next workout" card on the home screen always shows what's coming and its weights.
+- **Auto-progression & deload** — progression moves the **top set**: on success it goes up
+  automatically (+5 lb upper, +10 lb lower; **double** if you tagged it Easy) and the whole
+  pyramid re-anchors under it. Miss the reps and it holds; miss the same lift **3 sessions in a
+  row and it deloads 10%**. Weights are in **lbs**, rounded to loadable plates. A "next workout"
+  card on the home screen always shows what's coming, its set/rep scheme and top-set weight.
 - **Flexible logging**
   - **Strength**: exercises → sets (weight / reps / RIR), from a template or built freely.
   - **Cardio**: Zone 2 or intervals (duration + optional avg HR).
