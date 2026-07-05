@@ -21,6 +21,7 @@ function seedExercises() {
     repRange, targetRIR, unit: unit || 'lb',
     lastWeight: weight,          // last weight actually used
     targetWeight: weight,        // weight to lift NEXT session (what the guided screen shows)
+    bestWeight: weight,          // best (heaviest) successful weight -> PR detection
     workSets: workSets || 3,     // number of work sets
     increment: increment == null ? (pattern === 'squat' || pattern === 'hinge' ? 10 : 5) : increment,
     failStreak: 0,               // consecutive failed sessions -> deload at 3
@@ -95,6 +96,7 @@ export function load() {
       // backfill new per-exercise guided-workout fields
       (state.exercises || []).forEach((ex) => {
         if (ex.targetWeight == null) ex.targetWeight = ex.lastWeight || 0;
+        if (ex.bestWeight == null) ex.bestWeight = ex.lastWeight || 0;
         if (ex.workSets == null) ex.workSets = ex.pattern === 'core' ? 3 : 3;
         if (ex.increment == null) ex.increment = (ex.pattern === 'squat' || ex.pattern === 'hinge') ? 10 : 5;
         if (ex.failStreak == null) ex.failStreak = 0;

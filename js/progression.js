@@ -155,18 +155,25 @@ export function applyWorkoutResult(ex, sets, difficulty) {
 
   const from = usedWeight;
 
+  // personal record: a successful set at a higher weight than ever before
+  let pr = false;
+  if (success && (ex.unit === 'lb' || ex.unit === 'kg' || ex.unit === 'sec')) {
+    if (usedWeight > (ex.bestWeight || 0)) pr = true;
+    ex.bestWeight = Math.max(ex.bestWeight || 0, usedWeight);
+  }
+
   // bodyweight / timed: progress by reps or seconds, no deload machinery
   if (ex.unit === 'bw') {
     ex.failStreak = 0;
     ex.targetWeight = 0;
-    return { outcome: success ? 'progress' : 'hold', from: 0, to: 0, delta: 0, byReps: true };
+    return { outcome: success ? 'progress' : 'hold', from: 0, to: 0, delta: 0, byReps: true, pr: false };
   }
 
   if (success) {
     const inc = (difficulty === 'easy' ? 2 : 1) * (ex.increment != null ? ex.increment : loadIncrement(ex));
     ex.failStreak = 0;
     ex.targetWeight = roundToStep(usedWeight + inc, ex.unit);
-    return { outcome: 'progress', from, to: ex.targetWeight, delta: ex.targetWeight - from };
+    return { outcome: 'progress', from, to: ex.targetWeight, delta: ex.targetWeight - from, pr };
   }
 
   ex.failStreak = (ex.failStreak || 0) + 1;
@@ -182,4 +189,22 @@ export function applyWorkoutResult(ex, sets, difficulty) {
 function roundToStep(w, unit) {
   if (unit === 'sec') return Math.round(w / 5) * 5;
   return Math.round(w / 5) * 5; // nearest 5 lb (loadable with a 2.5 plate per side)
+}
+
+// Warm-up ramp for a barbell working weight: empty bar, then ~50/70/90%.
+// Ephemeral guidance (not saved / not counted toward volume or progression).
+export function warmupSets(work, bar) {
+  work = Number(work); bar = Number(bar) || 45;
+  if (!work || work <= bar + 10) return []; // light loads need no ramp
+  const steps = [{ p: 0, r: 5 }, { p: 0.5, r: 5 }, { p: 0.7, r: 3 }, { p: 0.9, r: 2 }];
+  const seen = new Set();
+  const out = [];
+  for (const { p, r } of steps) {
+    let w = p === 0 ? bar : Math.round((work * p) / 5) * 5;
+    if (w < bar) w = bar;
+    if (w >= work || seen.has(w)) continue;
+    seen.add(w);
+    out.push({ weight: w, reps: r });
+  }
+  return out;
 }

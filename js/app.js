@@ -7,9 +7,9 @@ import {
   aggregateWeek, weekRange, fmtWeekLabel, fmtDate, todayISO,
   proteinTarget, ACTIVITY_MAP,
 } from './week.js';
-import { suggestNext, commitExerciseState, fmtWeight, lastPerformance, guidedTarget, applyWorkoutResult } from './progression.js';
+import { suggestNext, commitExerciseState, fmtWeight, lastPerformance, guidedTarget, applyWorkoutResult, warmupSets } from './progression.js';
 import { TEMPLATES } from './templates.js';
-import { platesLabel } from './plates.js';
+import { platesLabel, platesFor } from './plates.js';
 import * as store from './store.js';
 import * as sync from './sync.js';
 import * as timer from './timer.js';
@@ -50,6 +50,11 @@ function toast(msg) {
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 1800);
 }
+function haptic(ms) { if (navigator.vibrate) { try { navigator.vibrate(ms || 12); } catch (e) {} } }
+
+// approximate real plate colors (lbs) for the plate visual
+const PLATE_COLOR = { 45: '#2f6fed', 35: '#e8b100', 25: '#1f9d55', 10: '#8a94ad', 5: '#e0574b', 2.5: '#c86bd6' };
+function plateColor(w) { return PLATE_COLOR[w] || '#6d8bff'; }
 function ring(pct, label, center, sub, color) {
   const r = 32, c = 2 * Math.PI * r;
   const off = c * (1 - Math.max(0, Math.min(1, pct)));
@@ -323,6 +328,7 @@ function startWorkout(tpl) {
         targetReps: t.reps,
         unit: t.unit,
         sets: Array.from({ length: t.sets }, () => ({ reps: t.reps, done: false })),
+        warmDone: [],   // ephemeral warm-up completion flags (not saved)
         difficulty: null,
       };
     }),
@@ -334,23 +340,39 @@ function startWorkout(tpl) {
 function renderWorkout() {
   titleEl.textContent = workout.templateName;
   weekLabelEl.textContent = '';
+  const bar = get().settings.barWeightLb;
+
+  // overall progress across all work sets
+  let totalSets = 0, doneSets = 0;
+  workout.exercises.forEach((w) => { totalSets += w.sets.length; doneSets += w.sets.filter((s) => s.done).length; });
+  const progressPct = totalSets ? (doneSets / totalSets) * 100 : 0;
+
   const blocks = workout.exercises.map((w, wi) => {
     const ex = exerciseById(w.exerciseId) || { name: '?', unit: w.unit };
     const isBar = w.unit !== 'bw' && w.unit !== 'sec';
-    const plate = isBar ? platesLabel(w.weight) : '';
+
+    // warm-up ramp (barbell only) — ephemeral guidance
+    const warm = isBar ? warmupSets(w.weight, bar) : [];
+    const warmHTML = warm.length ? h`<div class="warmup">
+        <span class="warmup__label">Warm-up</span>
+        <div class="warmup__dots">${warm.map((ws, i) => h`<button class="warmdot ${w.warmDone[i] ? 'is-done' : ''}" data-warm="${wi}:${i}">
+          <b>${ws.weight}</b><small>×${ws.reps}</small></button>`).join('')}</div>
+      </div>` : '';
+
     const setCircles = w.sets.map((st, si) => h`<button class="setdot ${st.done ? 'is-done' : ''} ${st.done && st.reps < w.targetReps ? 'is-miss' : ''}"
         data-set="${wi}:${si}">${st.done ? st.reps : (w.unit === 'sec' ? '⏱' : w.targetReps)}</button>`).join('');
     const allDone = w.sets.every((s) => s.done);
     const diffSel = ['easy', 'good', 'hard', 'failed'].map((d) => h`<button class="diffbtn ${w.difficulty === d ? 'is-sel diff--' + d : ''}" data-diff="${wi}:${d}">${diffLabel(d)}</button>`).join('');
-    return h`<div class="wex">
+    return h`<div class="wex ${allDone && w.difficulty ? 'is-complete' : ''}">
       <div class="wex__head">
         <div class="wex__name">${esc(ex.name)}</div>
         ${isBar
           ? `<div class="wex__wt"><button class="stepper" data-wt="${wi}:-">−</button><span>${fmtWeight(w.weight, w.unit)}</span><button class="stepper" data-wt="${wi}:+">+</button></div>`
           : `<div class="wex__wt wex__wt--bw">${w.unit === 'bw' ? 'Bodyweight' : 'Timed'}</div>`}
       </div>
-      ${isBar ? `<div class="wex__plates">🔩 ${plate} <span class="muted">/ side</span></div>` : ''}
-      <div class="wex__scheme muted small">${w.sets.length} × ${w.targetReps}${w.unit === 'sec' ? 's' : ' reps'} · tap a circle each set (tap again if you missed reps)</div>
+      ${isBar ? plateVizHTML(w.weight) : ''}
+      ${warmHTML}
+      <div class="wex__scheme muted small">${w.sets.length} × ${w.targetReps}${w.unit === 'sec' ? 's' : ' reps'} · tap a set, tap again if you missed reps</div>
       <div class="setdots">${setCircles}</div>
       <div class="wex__diff ${allDone ? '' : 'is-dim'}">
         <span class="wex__diff-label">How hard?</span>
@@ -364,6 +386,10 @@ function renderWorkout() {
       <button class="linkbtn" id="woCancel">✕ Cancel</button>
       <span class="muted small">${fmtDate(workout.date)}</span>
     </div>
+    <div class="wprogress">
+      <div class="wprogress__bar"><div class="wprogress__fill" style="width:${progressPct.toFixed(0)}%"></div></div>
+      <div class="wprogress__txt">${doneSets} / ${totalSets} sets</div>
+    </div>
     ${blocks}
     <button class="btn btn--primary btn--lg" id="woFinish">Finish workout ✓</button>
     <button class="btn btn--ghost mt" id="woAddEx">＋ Add exercise</button>
@@ -375,9 +401,15 @@ function renderWorkout() {
     const [wi, si] = b.dataset.set.split(':').map(Number);
     const st = workout.exercises[wi].sets[si];
     const tr = workout.exercises[wi].targetReps;
-    if (!st.done) { st.done = true; st.reps = tr; timer.start(); }
-    else if (st.reps > 0) { st.reps -= 1; }
+    if (!st.done) { st.done = true; st.reps = tr; timer.start(); haptic(15); }
+    else if (st.reps > 0) { st.reps -= 1; haptic(8); }
     else { st.done = false; st.reps = tr; }
+    renderWorkout();
+  }));
+  viewEl.querySelectorAll('[data-warm]').forEach((b) => b.addEventListener('click', () => {
+    const [wi, i] = b.dataset.warm.split(':').map(Number);
+    workout.exercises[wi].warmDone[i] = !workout.exercises[wi].warmDone[i];
+    haptic(8);
     renderWorkout();
   }));
   viewEl.querySelectorAll('[data-wt]').forEach((b) => b.addEventListener('click', () => {
@@ -402,6 +434,16 @@ function renderWorkout() {
   document.getElementById('woAddEx').addEventListener('click', addExerciseToWorkout);
 }
 
+// Colored plate visual for one side of the bar.
+function plateVizHTML(total) {
+  const { perSide, loadable } = platesFor(total);
+  const pills = perSide.map((p) => `<span class="plate" style="--pc:${plateColor(p)}">${Number.isInteger(p) ? p : p.toFixed(1)}</span>`).join('');
+  return h`<div class="wex__plates">
+    <span class="wex__bar">▬</span>${pills || '<span class="muted small">bar only</span>'}
+    <span class="wex__plates-side muted">${loadable ? '/ side' : 'not loadable'}</span>
+  </div>`;
+}
+
 function addExerciseToWorkout() {
   const exs = get().exercises.filter((e) => !e.archived && e.type === 'strength');
   const body = exs.map((e) => h`<div class="ex-pick" data-pick="${e.id}">
@@ -412,7 +454,7 @@ function addExerciseToWorkout() {
     const ex = exerciseById(el.dataset.pick);
     const t = guidedTarget(ex);
     workout.exercises.push({ exerciseId: ex.id, weight: t.weight, targetReps: t.reps, unit: t.unit,
-      sets: Array.from({ length: t.sets }, () => ({ reps: t.reps, done: false })), difficulty: null });
+      sets: Array.from({ length: t.sets }, () => ({ reps: t.reps, done: false })), warmDone: [], difficulty: null });
     closeModal(); renderWorkout();
   }));
 }
@@ -444,15 +486,18 @@ function finishWorkout() {
 }
 
 function showWorkoutSummary(summary) {
+  const prCount = summary.filter((o) => o.pr).length;
   const rows = summary.map((o) => {
     let pill, detail;
     if (o.byReps) { pill = `<span class="pill pill--up">▲ Progress</span>`; detail = 'Add reps next time'; }
     else if (o.outcome === 'progress') { pill = `<span class="pill pill--up">▲ +${o.delta}</span>`; detail = `${fmtWeight(o.from, o.unit)} → <b>${fmtWeight(o.to, o.unit)}</b>`; }
     else if (o.outcome === 'deload') { pill = `<span class="pill pill--rep">▼ Deload</span>`; detail = `${fmtWeight(o.from, o.unit)} → <b>${fmtWeight(o.to, o.unit)}</b> (3 misses)`; }
     else { pill = `<span class="pill pill--hold">Hold</span>`; detail = `Repeat ${fmtWeight(o.to, o.unit)}${o.fails ? ` · miss ${o.fails}/3` : ''}`; }
-    return h`<div class="suggest"><div><div class="suggest__name">${esc(o.name)}</div><div class="suggest__detail">${detail}</div></div>${pill}</div>`;
+    const prTag = o.pr ? '<span class="pr-tag">🏆 PR</span> ' : '';
+    return h`<div class="suggest"><div><div class="suggest__name">${prTag}${esc(o.name)}</div><div class="suggest__detail">${detail}</div></div>${pill}</div>`;
   }).join('');
-  openModal('Workout saved 💪', h`
+  if (prCount) haptic([20, 60, 20, 60, 40]);
+  openModal(prCount ? `🏆 ${prCount} new PR${prCount > 1 ? 's' : ''}!` : 'Workout saved 💪', h`
     <p class="small muted">Next targets are set automatically:</p>
     ${rows || '<div class="muted small">Logged.</div>'}
     <button class="btn btn--primary mt" id="woDone">Done</button>
@@ -691,28 +736,63 @@ function renderActivityDraft() {
 }
 
 // ================= HISTORY =================
+function relDay(iso) {
+  const today = todayISO();
+  if (iso === today) return 'Today';
+  const d = new Date(iso + 'T00:00:00'), y = new Date();
+  y.setDate(y.getDate() - 1);
+  if (iso === toISO(y)) return 'Yesterday';
+  return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+}
+function toISO(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+
+function sessionVolume(s) {
+  if (s.kind !== 'strength') return 0;
+  return (s.entries || []).reduce((v, e) => v + (e.sets || []).reduce((a, st) => a + (Number(st.weight) || 0) * (Number(st.reps) || 0), 0), 0);
+}
+
 function renderHistory() {
   const sessions = [...get().sessions].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   if (!sessions.length) {
-    viewEl.innerHTML = `<div class="empty"><div class="empty__ico">📭</div>No sessions yet. Tap <b>Log</b> to record your first one.</div>`;
+    viewEl.innerHTML = `<div class="empty"><div class="empty__ico">📭</div>No sessions yet.<br>Tap <b>Log</b> to start your first workout.</div>`;
     return;
   }
-  viewEl.innerHTML = sessions.map((s) => historyItem(s)).join('');
-  viewEl.querySelectorAll('[data-del-session]').forEach((b) => b.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const id = b.dataset.delSession;
-    update((st) => { st.sessions = st.sessions.filter((x) => x.id !== id); });
-    toast('Deleted'); renderHistory();
-  }));
+
+  // summary strip
+  const liftCount = sessions.filter((s) => s.kind === 'strength').length;
+  const totalVol = sessions.reduce((v, s) => v + sessionVolume(s), 0);
+  const cardioMin = sessions.filter((s) => s.kind === 'cardio' || s.kind === 'activity').reduce((m, s) => m + (Number(s.durationMin) || 0), 0);
+  const summary = h`<div class="histsum">
+    <div class="histsum__item"><b>${liftCount}</b><span>workouts</span></div>
+    <div class="histsum__item"><b>${totalVol >= 1000 ? (totalVol / 1000).toFixed(1) + 'k' : totalVol}</b><span>lb lifted</span></div>
+    <div class="histsum__item"><b>${cardioMin}</b><span>cardio min</span></div>
+  </div>`;
+
+  // group by day
+  const groups = [];
+  let cur = null;
+  sessions.forEach((s) => {
+    if (!cur || cur.date !== s.date) { cur = { date: s.date, items: [] }; groups.push(cur); }
+    cur.items.push(s);
+  });
+  const groupsHTML = groups.map((g) => h`
+    <div class="section-label">${relDay(g.date)}</div>
+    ${g.items.map((s) => historyItem(s)).join('')}
+  `).join('');
+
+  viewEl.innerHTML = summary + groupsHTML;
+  viewEl.querySelectorAll('[data-session]').forEach((el) => el.addEventListener('click', () => sessionDetail(el.dataset.session)));
 }
 
 function historyItem(s) {
-  let ico = '🏋️', title = 'Strength', detail = '';
+  let ico = '🏋️', title = 'Strength', detail = '', extra = '';
   if (s.kind === 'strength') {
     const totalSets = (s.entries || []).reduce((n, e) => n + e.sets.length, 0);
     const names = (s.entries || []).map((e) => (exerciseById(e.exerciseId)?.name) || e.exSnapshot?.name || '?');
-    title = `Strength · ${totalSets} sets`;
-    detail = names.join(', ');
+    title = s.templateName || 'Strength';
+    detail = names.join(' · ');
+    const vol = sessionVolume(s);
+    extra = `${totalSets} sets · ${vol >= 1000 ? (vol / 1000).toFixed(1) + 'k' : vol} lb`;
   } else if (s.kind === 'cardio') {
     ico = s.cardioType === 'interval' ? '🔥' : '🚴';
     title = `${s.cardioType === 'interval' ? 'Intervals' : 'Zone 2'} · ${s.durationMin} min`;
@@ -722,15 +802,42 @@ function historyItem(s) {
     ico = m.icon; title = `${m.label} · ${s.durationMin} min`; detail = m.note;
   }
   if (s.note) detail += (detail ? ' · ' : '') + '“' + esc(s.note) + '”';
-  return h`<div class="hist-item">
+  return h`<div class="hist-item" data-session="${s.id}">
     <div class="hist-item__ico">${ico}</div>
     <div class="hist-item__body">
       <div class="hist-item__t">${esc(title)}</div>
       <div class="hist-item__d">${detail}</div>
-      <div class="hist-item__date">${fmtDate(s.date)}</div>
+      ${extra ? `<div class="hist-item__extra">${extra}</div>` : ''}
     </div>
-    <button class="setrow__del" data-del-session="${s.id}">🗑</button>
+    <span class="hist-item__chev">›</span>
   </div>`;
+}
+
+function sessionDetail(id) {
+  const s = get().sessions.find((x) => x.id === id);
+  if (!s) return;
+  let body = '';
+  if (s.kind === 'strength') {
+    body = (s.entries || []).map((e) => {
+      const name = (exerciseById(e.exerciseId)?.name) || e.exSnapshot?.name || '?';
+      const sets = (e.sets || []).map((st) => st.weight ? `${st.weight}×${st.reps}` : `${st.reps}${st.reps > 30 ? 's' : ''}`).join(', ');
+      const diff = e.difficulty ? ` <span class="tag">${diffLabel(e.difficulty)}</span>` : '';
+      return h`<div class="det-ex"><div class="det-ex__name">${esc(name)}${diff}</div><div class="det-ex__sets">${sets}</div></div>`;
+    }).join('');
+    const vol = sessionVolume(s);
+    body += `<div class="small muted mt">Total volume: <b>${vol.toLocaleString()} lb</b></div>`;
+  } else {
+    body = `<div class="muted">${esc(s.kind === 'cardio' ? (s.cardioType === 'interval' ? 'Intervals' : 'Zone 2') : (ACTIVITY_MAP[s.activity] || ACTIVITY_MAP.other).label)} · ${s.durationMin} min${s.avgHR ? ` · avg ${s.avgHR} bpm` : ''}</div>`;
+  }
+  if (s.note) body += `<div class="small mt">“${esc(s.note)}”</div>`;
+  openModal(`${relDay(s.date)} · ${fmtDate(s.date)}`, h`
+    ${body}
+    <button class="btn btn--danger btn--sm mt" id="detDel">🗑 Delete this session</button>
+  `);
+  document.getElementById('detDel').addEventListener('click', () => {
+    update((st) => { st.sessions = st.sessions.filter((x) => x.id !== id); });
+    closeModal(); toast('Deleted'); renderHistory();
+  });
 }
 
 // ================= SETUP =================

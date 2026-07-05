@@ -339,3 +339,55 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .restbar__btns { margin-left: auto; display: flex; gap: 6px; }
 .restbar__btn { padding: 7px 11px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); color: var(--text); font-size: 0.8rem; font-weight: 700; cursor: pointer; }
 .restbar__btn--skip { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ---- workout polish: progress, warm-ups, plate visual, PR ---- */
+.wprogress { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.wprogress__bar { flex: 1; height: 8px; border-radius: 6px; background: var(--card-2); overflow: hidden; }
+.wprogress__fill { height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .35s ease; }
+.wprogress__txt { font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 600; }
+
+.wex.is-complete { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); background: color-mix(in srgb, var(--good) 6%, var(--card)); }
+
+/* plate visual */
+.wex__plates { display: flex; align-items: center; gap: 5px; margin-top: 10px; flex-wrap: wrap; }
+.wex__bar { color: var(--muted); font-size: 1.1rem; letter-spacing: -2px; }
+.plate {
+  min-width: 26px; height: 30px; padding: 0 6px; border-radius: 5px;
+  background: var(--pc); color: #fff; font-size: 0.74rem; font-weight: 800;
+  display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,.18); text-shadow: 0 1px 1px rgba(0,0,0,.3);
+}
+.wex__plates-side { font-size: 0.74rem; margin-left: 2px; }
+
+/* warm-ups */
+.warmup { margin-top: 12px; }
+.warmup__label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 700; }
+.warmup__dots { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.warmdot {
+  min-width: 46px; height: 44px; border-radius: 10px; border: 1px dashed var(--line);
+  background: transparent; color: var(--muted); cursor: pointer; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; line-height: 1;
+}
+.warmdot b { font-size: 0.9rem; font-weight: 800; }
+.warmdot small { font-size: 0.62rem; opacity: .8; margin-top: 1px; }
+.warmdot.is-done { border-style: solid; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text); }
+
+.pr-tag { font-size: 0.7rem; font-weight: 800; color: var(--warn); margin-right: 3px; }
+
+/* ---- history polish ---- */
+.histsum { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-bottom: 8px; }
+.histsum__item { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 8px; text-align: center; }
+.histsum__item b { display: block; font-size: 1.3rem; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.histsum__item span { font-size: 0.7rem; color: var(--muted); }
+.hist-item { align-items: center; cursor: pointer; }
+.hist-item__extra { font-size: 0.72rem; color: var(--accent-2); font-weight: 600; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.hist-item__chev { color: var(--muted); font-size: 1.4rem; line-height: 1; }
+.det-ex { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.det-ex:last-of-type { border-bottom: 0; }
+.det-ex__name { font-weight: 600; font-size: 0.9rem; }
+.det-ex__sets { color: var(--muted); font-size: 0.82rem; font-variant-numeric: tabular-nums; text-align: right; }
+
+/* subtle entrance so views feel alive */
+.view > .card, .view > .hero, .view > .wex, .view > .histsum, .view > .hist-item { animation: rise .28s ease both; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .view > * { animation: none !important; } }
