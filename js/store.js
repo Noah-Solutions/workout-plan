@@ -1,7 +1,7 @@
 // store.js — persistent state, defaults, and seed library
 const KEY = 'ct_state_v1';
 
-export const MUSCLES = ['Quads', 'Hamstrings', 'Glutes', 'Chest', 'Back', 'Shoulders', 'Biceps', 'Triceps', 'Core'];
+export const MUSCLES = ['Quads', 'Hamstrings', 'Glutes', 'Chest', 'Back', 'Shoulders', 'Biceps', 'Triceps', 'Core', 'Calves'];
 export const PATTERNS = ['squat', 'hinge', 'push', 'pull'];
 export const PATTERN_LABEL = { squat: 'Squat', hinge: 'Hinge', push: 'Push', pull: 'Pull', core: 'Core', other: 'Other' };
 
@@ -12,12 +12,18 @@ export function uid() {
   return 'id' + Date.now().toString(36) + '_' + uidCounter.toString(36);
 }
 
-// Seed exercises are built from the plan's Option A / Option B lifts.
-// workSets/reps + increment/targetWeight/failStreak drive the guided (StrongLifts-style)
-// workout flow: show target weight, tick sets, auto-progress or deload.
+// Stable, name-derived ids for seed exercises. Two devices seeding the same
+// library (or an existing user picking up newly-shipped lifts) generate the
+// SAME id, so record-level sync merges them instead of duplicating.
+function slug(name) { return 'sx_' + String(name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''); }
+
+// Seed exercises are built from the plan's lifts plus a broad library of the
+// common barbell / dumbbell / machine / bodyweight movements people reach for.
+// workSets/reps + increment/targetWeight/failStreak drive the guided
+// (StrongLifts-style) flow: show target weight, tick sets, auto-progress or deload.
 function seedExercises() {
   const e = (name, pattern, muscles, repRange, targetRIR, weight, unit, workSets, increment) => ({
-    id: uid(), name, pattern, muscles, type: 'strength',
+    id: slug(name), name, pattern, muscles, type: 'strength',
     repRange, targetRIR, unit: unit || 'lb',
     lastWeight: weight,          // last weight actually used
     targetWeight: weight,        // weight to lift NEXT session (what the guided screen shows)
@@ -28,19 +34,43 @@ function seedExercises() {
     custom: false, archived: false,
   });
   return [
+    // ---- core barbell lifts (the plan's A/B days) ----
     e('Back Squat', 'squat', ['Quads', 'Glutes'], [5, 5], 2, 115, 'lb', 5, 10),
     e('Bench Press', 'push', ['Chest', 'Triceps', 'Shoulders'], [5, 5], 2, 95, 'lb', 5, 5),
     e('Barbell Row', 'pull', ['Back', 'Biceps'], [5, 5], 2, 90, 'lb', 5, 5),
     e('Romanian Deadlift', 'hinge', ['Hamstrings', 'Glutes'], [5, 5], 2, 155, 'lb', 5, 10),
     e('Overhead Press', 'push', ['Shoulders', 'Triceps'], [5, 5], 2, 75, 'lb', 5, 5),
     e('Deadlift', 'hinge', ['Hamstrings', 'Glutes', 'Back'], [5, 5], 2, 185, 'lb', 1, 10),
-    e('Pull-up', 'pull', ['Back', 'Biceps'], [6, 10], 1, 0, 'bw', 3, 0),
-    e('Barbell Curl', 'pull', ['Biceps'], [8, 12], 1, 45, 'lb', 3, 5),
-    e('Triceps Pushdown', 'push', ['Triceps'], [10, 15], 1, 30, 'lb', 3, 5),
-    e('Leg Curl', 'hinge', ['Hamstrings'], [10, 15], 1, 50, 'lb', 3, 5),
-    e('Plank', 'core', ['Core'], [30, 60], 2, 0, 'sec', 3, 5),
+    // ---- squat pattern variations ----
+    e('Front Squat', 'squat', ['Quads', 'Glutes'], [5, 8], 2, 95, 'lb', 3, 10),
     e('Goblet Squat', 'squat', ['Quads', 'Glutes'], [8, 12], 2, 50, 'lb', 3, 5),
+    e('Bulgarian Split Squat', 'squat', ['Quads', 'Glutes'], [8, 12], 2, 30, 'lb', 3, 5),
+    e('Leg Press', 'squat', ['Quads', 'Glutes'], [8, 12], 2, 180, 'lb', 3, 10),
+    e('Walking Lunge', 'squat', ['Quads', 'Glutes'], [10, 12], 2, 25, 'lb', 3, 5),
+    // ---- hinge pattern variations ----
+    e('Hip Thrust', 'hinge', ['Glutes', 'Hamstrings'], [8, 12], 2, 135, 'lb', 3, 10),
+    e('Leg Curl', 'hinge', ['Hamstrings'], [10, 15], 1, 50, 'lb', 3, 5),
+    e('Back Extension', 'hinge', ['Hamstrings', 'Glutes', 'Back'], [10, 15], 1, 0, 'bw', 3, 5),
+    // ---- push (horizontal + vertical + isolation) ----
+    e('Incline Bench Press', 'push', ['Chest', 'Shoulders', 'Triceps'], [6, 10], 2, 75, 'lb', 3, 5),
+    e('Dumbbell Bench Press', 'push', ['Chest', 'Triceps', 'Shoulders'], [8, 12], 2, 45, 'lb', 3, 5),
+    e('Dumbbell Shoulder Press', 'push', ['Shoulders', 'Triceps'], [8, 12], 2, 30, 'lb', 3, 5),
+    e('Push-up', 'push', ['Chest', 'Triceps'], [10, 20], 1, 0, 'bw', 3, 0),
+    e('Dip', 'push', ['Chest', 'Triceps'], [6, 12], 1, 0, 'bw', 3, 0),
+    e('Lateral Raise', 'push', ['Shoulders'], [12, 15], 1, 15, 'lb', 3, 5),
+    e('Triceps Pushdown', 'push', ['Triceps'], [10, 15], 1, 30, 'lb', 3, 5),
+    // ---- pull (vertical + horizontal + isolation) ----
+    e('Pull-up', 'pull', ['Back', 'Biceps'], [6, 10], 1, 0, 'bw', 3, 0),
+    e('Chin-up', 'pull', ['Back', 'Biceps'], [6, 10], 1, 0, 'bw', 3, 0),
     e('Lat Pulldown', 'pull', ['Back', 'Biceps'], [8, 12], 1, 90, 'lb', 3, 5),
+    e('Seated Cable Row', 'pull', ['Back', 'Biceps'], [8, 12], 1, 100, 'lb', 3, 5),
+    e('Face Pull', 'pull', ['Back', 'Shoulders'], [12, 15], 1, 30, 'lb', 3, 5),
+    e('Barbell Curl', 'pull', ['Biceps'], [8, 12], 1, 45, 'lb', 3, 5),
+    e('Hammer Curl', 'pull', ['Biceps'], [8, 12], 1, 30, 'lb', 3, 5),
+    // ---- calves + core ----
+    e('Standing Calf Raise', 'other', ['Calves'], [10, 15], 1, 90, 'lb', 3, 10),
+    e('Plank', 'core', ['Core'], [30, 60], 2, 0, 'sec', 3, 5),
+    e('Hanging Leg Raise', 'core', ['Core'], [8, 15], 1, 0, 'bw', 3, 0),
   ];
 }
 
@@ -61,6 +91,8 @@ function defaults() {
       barWeightLb: 45,                       // Olympic barbell
       platesLb: [45, 35, 25, 10, 5, 2.5],    // plates available per side (lbs)
       restTimer: { enabled: true, seconds: 90, sound: true, vibrate: true },
+      nextWorkout: null,                     // one-shot rotation override (template name) or null
+
       targets: {
         setsPerMuscle: 10,     // growth target per muscle / week
         maintenanceSets: 4,    // maintenance floor
@@ -118,6 +150,13 @@ export function load() {
         if (ex.workSets == null) ex.workSets = ex.pattern === 'core' ? 3 : 3;
         if (ex.increment == null) ex.increment = (ex.pattern === 'squat' || ex.pattern === 'hinge') ? 10 : 5;
         if (ex.failStreak == null) ex.failStreak = 0;
+      });
+      // Give existing users any newly-shipped seed lifts (matched by name so we
+      // never duplicate one they already have, and never resurrect one they
+      // archived). Stable ids keep this idempotent and sync-safe across devices.
+      const haveNames = new Set((state.exercises || []).map((x) => (x.name || '').toLowerCase()));
+      seedExercises().forEach((se) => {
+        if (!haveNames.has(se.name.toLowerCase())) state.exercises.push(se);
       });
       if (state.rev == null) state.rev = 0;
       // Backfill ONLY for pre-schema states missing the key entirely (they have real

@@ -195,6 +195,9 @@ function renderToday() {
 
   const startBtn = document.getElementById('heroStart');
   if (startBtn) startBtn.addEventListener('click', () => startWorkout(nextTemplate()));
+  viewEl.querySelectorAll('[data-prog]').forEach((b) => b.addEventListener('click', () => {
+    setNextWorkout(b.dataset.prog); haptic(8); renderToday();
+  }));
   const rdCard = document.getElementById('readinessCard');
   if (rdCard) rdCard.addEventListener('click', openRecoveryDetail);
   viewEl.querySelectorAll('[data-checkin]').forEach((b) => b.addEventListener('click', () => openCheckin(todayISO(), b.dataset.checkin)));
@@ -376,27 +379,68 @@ function renderPlan() {
 }
 
 // ---- "Next workout" hero (StrongLifts-style home) ----
-// Alternates the two full-body templates based on the last guided workout.
+// The recurring program = templates flagged `rotation`. The "next" day advances
+// from the last one logged; a one-shot manual override (settings.nextWorkout)
+// wins so you can jump straight to any day in the program.
+function rotationTemplates() {
+  const rot = TEMPLATES.filter((t) => t.rotation);
+  return rot.length ? rot : TEMPLATES.slice(0, 2);
+}
 function nextTemplate() {
+  const rot = rotationTemplates();
+  const override = get().settings.nextWorkout;
+  if (override) {
+    const t = TEMPLATES.find((x) => x.name === override);
+    if (t) return t;
+  }
   const strengths = get().sessions.filter((s) => s.kind === 'strength' && s.templateName);
   const last = strengths.length ? strengths[strengths.length - 1].templateName : null;
-  const a = TEMPLATES[0], b = TEMPLATES[1];
-  return last === a.name ? b : a;
+  const idx = rot.findIndex((t) => t.name === last);
+  return rot[(idx + 1) % rot.length] || rot[0];
+}
+// Persist a one-shot override so the home screen shows the day you picked next.
+function setNextWorkout(name) {
+  update((s) => { s.settings.nextWorkout = name || null; });
+}
+
+// One-line summary of the last time this lift was performed, e.g. "115×5,5,5".
+function lastPerfLabel(ex) {
+  const last = lastPerformance(ex.id);
+  if (!last) return null;
+  const working = last.sets.filter((st) => Number(st.reps) > 0);
+  if (!working.length) return null;
+  const weighted = ex.unit !== 'bw' && ex.unit !== 'sec';
+  // collapse to "weight×r,r,r" when the weight is constant across sets
+  const weights = new Set(working.map((st) => Number(st.weight) || 0));
+  const reps = working.map((st) => st.reps).join(',');
+  let body;
+  if (!weighted) body = ex.unit === 'sec' ? working.map((st) => `${st.reps}s`).join(', ') : `${reps} reps`;
+  else if (weights.size === 1) body = `${fmtWeight([...weights][0], ex.unit)} × ${reps}`;
+  else body = working.map((st) => `${st.weight}×${st.reps}`).join(', ');
+  return { body, date: last.date };
 }
 
 function nextWorkoutHeroHTML() {
   const tpl = nextTemplate();
+  const rot = rotationTemplates();
   const exs = tpl.exercises
     .map((name) => get().exercises.find((e) => e.name.toLowerCase() === name.toLowerCase() && !e.archived))
     .filter(Boolean);
   const rows = exs.map((ex) => {
     const t = guidedTarget(ex);
+    const up = (ex.unit === 'lb' || ex.unit === 'kg') && t.weight > (ex.lastWeight || 0) && (ex.lastWeight || 0) > 0;
+    const lp = lastPerfLabel(ex);
     return h`<div class="hero-ex">
-      <span class="hero-ex__name">${esc(ex.name)}</span>
+      <span class="hero-ex__name">${esc(ex.name)}${lp ? `<span class="hero-ex__last">last ${esc(lp.body)}</span>` : ''}</span>
       <span class="hero-ex__scheme">${t.sets}×${t.reps}</span>
-      <span class="hero-ex__wt">${fmtWeight(t.weight, t.unit)}</span>
+      <span class="hero-ex__wt">${up ? '<span class="hero-ex__up">▲</span>' : ''}${fmtWeight(t.weight, t.unit)}</span>
     </div>`;
   }).join('');
+  // Program strip — shows the whole rotation and where you are; tap to jump.
+  const strip = rot.length > 1 ? h`<div class="hero__rotation" role="tablist" aria-label="Program">
+    ${rot.map((t) => h`<button class="rotchip ${t.name === tpl.name ? 'is-next' : ''}" data-prog="${esc(t.name)}"
+        title="${esc(t.name)}">${esc(t.short || t.name)}${t.name === tpl.name ? '<span class="rotchip__badge">NEXT</span>' : ''}</button>`).join('')}
+  </div>` : '';
   return h`<div class="hero">
     <div class="hero__top">
       <div>
@@ -405,6 +449,7 @@ function nextWorkoutHeroHTML() {
       </div>
       <span class="hero__badge">${exs.length} lift${exs.length === 1 ? '' : 's'}</span>
     </div>
+    ${strip}
     <div class="hero__exs">${rows}</div>
     <button class="btn btn--accent hero__start" id="heroStart">Start workout</button>
   </div>`;
@@ -574,6 +619,7 @@ function startWorkout(tpl) {
         weight: t.weight,
         targetReps: t.reps,
         unit: t.unit,
+        increment: t.increment,
         sets: Array.from({ length: t.sets }, () => ({ reps: t.reps, done: false })),
         warmDone: [],   // ephemeral warm-up completion flags (not saved)
         difficulty: null,
@@ -581,6 +627,8 @@ function startWorkout(tpl) {
     }),
   };
   timer.stop();
+  // the override is a one-shot — consume it now that its day has started
+  if (get().settings.nextWorkout) update((s) => { s.settings.nextWorkout = null; });
   logReturn = null; // a finished/discarded workout always lands on Today
   setTab('log');
 }
@@ -610,6 +658,8 @@ function renderWorkout() {
     const setCircles = w.sets.map((st, si) => h`<button class="setdot ${st.done ? 'is-done' : ''} ${st.done && st.reps < w.targetReps ? 'is-miss' : ''}"
         data-set="${wi}:${si}">${st.done ? st.reps : (w.unit === 'sec' ? '⏱' : w.targetReps)}</button>`).join('');
     const allDone = w.sets.every((s) => s.done);
+    const lp = ex.id ? lastPerfLabel(ex) : null;
+    const lastLine = lp ? h`<div class="wex__last">Last time · <b>${esc(lp.body)}</b> <span class="muted">${esc(fmtDate(lp.date))}</span></div>` : '';
     const diffSel = ['easy', 'good', 'hard', 'failed'].map((d) => h`<button class="diffbtn ${w.difficulty === d ? 'is-sel diff--' + d : ''}" data-diff="${wi}:${d}">${diffLabel(d)}</button>`).join('');
     return h`<div class="wex ${allDone && w.difficulty ? 'is-complete' : ''}">
       <div class="wex__head">
@@ -618,6 +668,7 @@ function renderWorkout() {
           ? `<div class="wex__wt"><button class="stepper" data-wt="${wi}:-">−</button><span>${fmtWeight(w.weight, w.unit)}</span><button class="stepper" data-wt="${wi}:+">+</button></div>`
           : `<div class="wex__wt wex__wt--bw">${w.unit === 'bw' ? 'Bodyweight' : 'Timed'}</div>`}
       </div>
+      ${lastLine}
       ${isBar ? plateVizHTML(w.weight) : ''}
       ${warmHTML}
       <div class="wex__scheme muted small">${w.sets.length} × ${w.targetReps}${w.unit === 'sec' ? 's' : ' reps'} · tap a set, tap again if you missed reps</div>
@@ -663,8 +714,10 @@ function renderWorkout() {
   viewEl.querySelectorAll('[data-wt]').forEach((b) => b.addEventListener('click', () => {
     const [wi, dir] = b.dataset.wt.split(':');
     const w = workout.exercises[wi];
-    const step = 5;
+    // step by this lift's own progression increment (min 2.5 for loadability)
+    const step = Math.max(2.5, Number(w.increment) || 5);
     w.weight = Math.max(0, Math.round((w.weight + (dir === '+' ? step : -step)) / 2.5) * 2.5);
+    haptic(8);
     renderWorkout();
   }));
   viewEl.querySelectorAll('[data-diff]').forEach((b) => b.addEventListener('click', () => {
@@ -694,14 +747,21 @@ function plateVizHTML(total) {
 
 function addExerciseToWorkout() {
   const exs = get().exercises.filter((e) => !e.archived && e.type === 'strength');
-  const body = exs.map((e) => h`<div class="ex-pick" data-pick="${e.id}">
-    <div><div class="ex-pick__name">${esc(e.name)}</div><div class="ex-pick__meta">${e.muscles.join(', ')}</div></div>
-    <span class="linkbtn">Add</span></div>`).join('');
+  const groups = {};
+  exs.forEach((e) => { (groups[e.pattern] = groups[e.pattern] || []).push(e); });
+  const order = ['squat', 'hinge', 'push', 'pull', 'core', 'other'];
+  const body = order.filter((p) => groups[p]).map((p) => h`
+    <div class="section-label">${PATTERN_LABEL[p]}</div>
+    ${groups[p].map((e) => h`<div class="ex-pick" data-pick="${e.id}">
+      <div><div class="ex-pick__name">${esc(e.name)}</div>
+      <div class="ex-pick__meta">${e.muscles.join(', ')} · ${fmtWeight(guidedTarget(e).weight, e.unit)}</div></div>
+      <span class="linkbtn">Add</span></div>`).join('')}
+  `).join('');
   openModal('Add exercise', body);
   modalRoot.querySelectorAll('[data-pick]').forEach((el) => el.addEventListener('click', () => {
     const ex = exerciseById(el.dataset.pick);
     const t = guidedTarget(ex);
-    workout.exercises.push({ exerciseId: ex.id, weight: t.weight, targetReps: t.reps, unit: t.unit,
+    workout.exercises.push({ exerciseId: ex.id, weight: t.weight, targetReps: t.reps, unit: t.unit, increment: t.increment,
       sets: Array.from({ length: t.sets }, () => ({ reps: t.reps, done: false })), warmDone: [], difficulty: null });
     closeModal(); renderWorkout();
   }));
@@ -2360,6 +2420,7 @@ function exerciseEditor(id, onSave) {
     <input type="checkbox" class="m-chk" value="${m}" ${ex && ex.muscles.includes(m) ? 'checked' : ''} style="width:auto"> ${m}</label>`).join('');
   const patOpts = ['squat','hinge','push','pull','core','other'].map((p) => `<option value="${p}" ${ex && ex.pattern===p?'selected':''}>${PATTERN_LABEL[p]}</option>`).join('');
   const unitOpts = ['lb','kg','bw','sec'].map((u) => `<option value="${u}" ${ex && ex.unit===u?'selected':''}>${u}</option>`).join('');
+  const curWt = ex ? (ex.targetWeight != null ? ex.targetWeight : ex.lastWeight) : 0;
   openModal(ex ? 'Edit exercise' : 'New exercise', h`
     <label class="field"><span>Name</span><input id="exName" value="${ex ? esc(ex.name) : ''}" placeholder="e.g. Bulgarian Split Squat" /></label>
     <div class="field-row">
@@ -2372,7 +2433,12 @@ function exerciseEditor(id, onSave) {
       <label class="field"><span>Rep max</span><input type="number" id="exHi" value="${ex ? ex.repRange[1] : 12}" /></label>
       <label class="field"><span>Target RIR</span><input type="number" id="exRir" value="${ex ? ex.targetRIR : 2}" /></label>
     </div>
-    <label class="field"><span>Current working weight</span><input type="number" id="exWt" value="${ex ? ex.lastWeight : 0}" /></label>
+    <div class="field-row-3">
+      <label class="field"><span>Next weight</span><input type="number" inputmode="decimal" id="exWt" value="${curWt}" /></label>
+      <label class="field"><span>Work sets</span><input type="number" inputmode="numeric" id="exSets" value="${ex ? (ex.workSets || 3) : 3}" /></label>
+      <label class="field"><span>Step (+/lb)</span><input type="number" inputmode="decimal" id="exInc" value="${ex ? (ex.increment != null ? ex.increment : 5) : 5}" /></label>
+    </div>
+    <p class="small muted" style="margin:-4px 0 12px">“Next weight” is what the guided workout prescribes next; it auto-adds the <b>step</b> after a successful session. Bodyweight/timed lifts progress by reps.</p>
     <div class="btn-row">
       ${ex ? '<button class="btn btn--danger btn--sm" id="exDel">Delete</button>' : ''}
       <button class="btn btn--primary" id="exSave">Save</button>
@@ -2382,17 +2448,26 @@ function exerciseEditor(id, onSave) {
     const name = document.getElementById('exName').value.trim();
     if (!name) { toast('Name required'); return; }
     const muscles = [...modalRoot.querySelectorAll('.m-chk:checked')].map((c) => c.value);
+    const wt = Number(document.getElementById('exWt').value) || 0;
     const data = {
       name, pattern: document.getElementById('exPat').value, unit: document.getElementById('exUnit').value,
       muscles: muscles.length ? muscles : ['Core'],
       repRange: [Number(document.getElementById('exLo').value) || 8, Number(document.getElementById('exHi').value) || 12],
       targetRIR: Number(document.getElementById('exRir').value) || 2,
-      lastWeight: Number(document.getElementById('exWt').value) || 0,
+      workSets: Math.max(1, Number(document.getElementById('exSets').value) || 3),
+      increment: Math.max(0, Number(document.getElementById('exInc').value) || 0),
     };
     let saved;
     update((s) => {
-      if (ex) { Object.assign(ex, data); saved = ex; }
-      else { saved = { id: uid(), type: 'strength', custom: true, archived: false, ...data }; s.exercises.push(saved); }
+      if (ex) {
+        Object.assign(ex, data);
+        ex.targetWeight = wt;               // the controllable next-session knob
+        saved = ex;
+      } else {
+        saved = { id: uid(), type: 'strength', custom: true, archived: false, ...data,
+          lastWeight: wt, targetWeight: wt, bestWeight: wt, failStreak: 0 };
+        s.exercises.push(saved);
+      }
     });
     closeModal(); toast('Saved'); onSave && onSave(saved);
   });

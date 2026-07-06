@@ -304,8 +304,33 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .hero-ex:first-child { border-top: 0; }
 .hero-ex__name { font-weight: 600; }
 .hero-ex__scheme { font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-.hero-ex__wt { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 62px; text-align: right; }
+.hero-ex__wt { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 62px; text-align: right; white-space: nowrap; }
+.hero-ex__up { color: var(--good); font-size: 0.72rem; margin-right: 3px; }
 .hero__start { font-weight: 700; }
+
+/* per-lift "last time" sub-line on the hero */
+.hero-ex { align-items: center; }
+.hero-ex__name { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.hero-ex__last { font-size: 0.7rem; color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+
+/* program rotation strip (which day is next, tap to jump) */
+.hero__rotation { display: flex; gap: 8px; margin: 12px 0 2px; flex-wrap: wrap; }
+.rotchip {
+  appearance: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  min-width: 40px; height: 34px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card-2); color: var(--muted);
+  font-size: 0.86rem; font-weight: 800; letter-spacing: .02em; transition: transform .06s, background .15s, color .15s, border-color .15s;
+}
+.rotchip:active { transform: scale(.94); }
+.rotchip.is-next { background: color-mix(in srgb, var(--accent) 16%, var(--card)); border-color: var(--accent); color: var(--text); }
+.rotchip__badge { font-size: 0.56rem; letter-spacing: .1em; color: var(--accent); font-weight: 800; }
+
+/* "last time" line inside the guided workout */
+.wex__last {
+  margin-top: 8px; font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums;
+  padding: 6px 10px; background: var(--card-2); border-radius: var(--radius-sm); display: inline-block;
+}
+.wex__last b { color: var(--text); font-weight: 700; }
 
 /* Log choice hero variant */
 .logchoice__btn--hero { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--card)); }

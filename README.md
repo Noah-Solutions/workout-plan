@@ -89,12 +89,17 @@ and you land back on that day view.
   merge where health correlations live). A gentle home-screen nudge reminds you to back up when
   it's been a month (quiet when cloud sync is on).
 - **Guided workout (StrongLifts-style)** — a "Start workout" flow that shows your exact **target
-  weight** for every lift, a **plate breakdown** per side, and tap-to-complete **set circles** (tap
-  again if you missed reps). A built-in **rest timer** auto-starts after each set with a beep/vibrate
+  weight** for every lift, the **last time you did it** (e.g. "115×5,5,5") right under the name, a
+  **plate breakdown** per side, and tap-to-complete **set circles** (tap again if you missed reps).
+  The in-workout weight **± stepper moves by that lift's own progression step** (e.g. 10 lb for
+  squats, 5 lb for presses). A built-in **rest timer** auto-starts after each set with a beep/vibrate
   when it's up. You rate each lift's **difficulty** (Easy / Good / Hard / Failed) — the rating is
   also stored as an approximate per-set **RIR** so guided sessions keep an effort signal. Sessions
   record **start/finish timestamps** and every **planned set** (missed sets are kept as 0-rep rows),
   so compliance and time-of-day effects are analyzable later.
+- **Visible program rotation** — the home screen shows your whole recurring program as a strip of
+  day chips (A · B) with the upcoming day badged **NEXT**; the app auto-advances after each workout,
+  and you can **tap any day to jump to it** next.
 - **Editable history & day view** — any saved session can be **edited** (fix a typo'd weight,
   wrong duration) or deleted from History, and deletions offer a 6-second **Undo** (safe even if
   the deletion already synced — restores outlive their tombstone). Tapping a date opens a **day
@@ -114,7 +119,10 @@ and you land back on that day view.
   - **Other activity**: climbing, easy/hard ride, hike — each mapped to what it *replaces* per the
     plan's substitution guide (e.g. climbing → a pull day + partial cardio; hard ride → intervals).
   - **Skip anything** — nothing is required; the week just reflects what you did.
-- **Editable exercise library** — add custom exercises with pattern, muscles, rep range, target RIR.
+- **Broad exercise library** — ~30 seeded lifts across every pattern (squat/hinge/press/pull
+  variations, dumbbell & machine work, bodyweight, calves and core), and you can add custom
+  exercises with pattern, muscles, rep range, target RIR, **work sets** and the **auto-increment
+  step** — the knobs that drive the guided workout's target and progression.
 - **Starter templates** — Full Body A/B and Upper/Lower from the plan.
 - **Tunable targets & profile** — bodyweight, units, protein g/kg, max HR, and every weekly target.
 - **Cloud sync (optional)** — back up/sync everything through your own tiny free server. Local-first
