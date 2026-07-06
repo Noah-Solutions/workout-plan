@@ -325,6 +325,39 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .rotchip.is-next { background: color-mix(in srgb, var(--accent) 16%, var(--card)); border-color: var(--accent); color: var(--text); }
 .rotchip__badge { font-size: 0.56rem; letter-spacing: .1em; color: var(--accent); font-weight: 800; }
 
+/* workout (template) editor rows */
+.tplrow {
+  display: grid; grid-template-columns: 26px 1fr 44px 12px 44px 30px 30px;
+  gap: 6px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line);
+}
+.tplrow__move { display: flex; flex-direction: column; gap: 2px; }
+.tplrow__mv {
+  appearance: none; border: 0; background: none; color: var(--muted);
+  font-size: 0.7rem; line-height: 1; padding: 2px; cursor: pointer;
+}
+.tplrow__mv:disabled { opacity: .25; cursor: default; }
+.tplrow__mv:not(:disabled):active { color: var(--accent); }
+.tplrow__body { min-width: 0; }
+.tplrow__name { font-weight: 600; font-size: 0.88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tplrow__n { padding: 9px 4px; text-align: center; font-variant-numeric: tabular-nums; }
+.tplrow__x { color: var(--muted); text-align: center; font-size: 0.8rem; }
+.tplrow__act {
+  appearance: none; border: 0; background: none; color: var(--muted);
+  font-size: 1.05rem; line-height: 1; cursor: pointer; padding: 6px 2px;
+}
+.tplrow__act:active { color: var(--accent); }
+.tplrow__act--del { color: var(--danger); font-size: 1.25rem; }
+
+/* short workout code chip in the Setup list */
+.tplcode {
+  display: inline-grid; place-items: center; min-width: 22px; height: 22px;
+  border-radius: 7px; background: var(--card-2); border: 1px solid var(--line);
+  font-size: 0.72rem; font-weight: 800; margin-right: 4px; padding: 0 4px;
+}
+
+/* hero edit (pencil) button */
+.hero__edit { flex: none; }
+
 /* "last time" line inside the guided workout */
 .wex__last {
   margin-top: 8px; font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums;

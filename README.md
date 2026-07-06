@@ -100,6 +100,13 @@ and you land back on that day view.
 - **Visible program rotation** — the home screen shows your whole recurring program as a strip of
   day chips (A · B) with the upcoming day badged **NEXT**; the app auto-advances after each workout,
   and you can **tap any day to jump to it** next.
+- **Editable program (StrongLifts-style)** — workouts are real, editable objects, not hardcoded
+  templates. Tap **✎ on the home hero** (or Setup → Workouts) to rename a workout, toggle it in or
+  out of the rotation, **add / remove / reorder** exercises, set each one's **sets × reps** (the
+  scheme lives in the workout — e.g. Deadlift 1×5 — while the progressing weight lives on the
+  exercise), or **⇄ replace** an exercise with a variation: same-pattern suggestions are listed
+  first and the sets × reps carry over. Changes apply from the next session, and workouts sync
+  across devices like everything else.
 - **Editable history & day view** — any saved session can be **edited** (fix a typo'd weight,
   wrong duration) or deleted from History, and deletions offer a 6-second **Undo** (safe even if
   the deletion already synced — restores outlive their tombstone). Tapping a date opens a **day
@@ -111,8 +118,12 @@ and you land back on that day view.
   targets.
 - **Auto-progression & deload** — on success the next target goes up automatically (+5 lb upper,
   +10 lb lower; **double** if you tagged it Easy). Miss the reps and it holds; miss the same lift
-  **3 sessions in a row and it deloads 10%**. Weights are in **lbs**, rounded to loadable plates.
-  A "next workout" card on the home screen always shows what's coming and its weights.
+  several sessions in a row and it deloads. Both knobs are **configurable** (Setup: deload after
+  N missed sessions, deload by X% — defaults 3 and 10%, like StrongLifts). The **rest timer is
+  adaptive** too: a completed set starts your normal rest, a **missed set starts a longer break**
+  (default 5 min) so the next attempt has full energy stores. Weights are in **lbs**, rounded to
+  loadable plates. A "next workout" card on the home screen always shows what's coming and its
+  weights.
 - **Flexible logging**
   - **Strength**: exercises → sets (weight / reps / RIR), from a template or built freely.
   - **Cardio**: Zone 2 or intervals (duration + optional avg HR).
@@ -123,11 +134,12 @@ and you land back on that day view.
   variations, dumbbell & machine work, bodyweight, calves and core), and you can add custom
   exercises with pattern, muscles, rep range, target RIR, **work sets** and the **auto-increment
   step** — the knobs that drive the guided workout's target and progression.
-- **Starter templates** — Full Body A/B and Upper/Lower from the plan.
+- **Starter templates** — Full Body A/B and Upper/Lower from the plan, seeded once and then fully
+  yours to edit.
 - **Tunable targets & profile** — bodyweight, units, protein g/kg, max HR, and every weekly target.
 - **Cloud sync (optional)** — back up/sync everything through your own tiny free server. Local-first
   (the app keeps working offline), auto-syncs on change, and merges **record-by-record** across
-  devices (sessions & exercises by id, check-ins by day) so a morning check-in on your phone and a
+  devices (sessions, exercises & workouts by id, check-ins by day) so a morning check-in on your phone and a
   workout on a tablet both survive. Auth is a single secret token — no accounts, no OAuth. See
   **[Cloud sync setup](#cloud-sync-self-hosted)** below.
 - **Export / import** JSON backups; reset to defaults.
@@ -193,8 +205,8 @@ The app pulls on connect and auto-pushes (debounced) on every change. Use **Sync
 
 - **Local-first:** your device is the working copy; everything works offline. Changes auto-sync
   (debounced pull-merge-push) when connected, and the app syncs on connect.
-- **Record-level merge:** every sync pulls the server copy and merges it field-by-field — sessions
-  and exercises by id, check-ins / protein / device data by date — with the newer record winning
+- **Record-level merge:** every sync pulls the server copy and merges it field-by-field — sessions,
+  exercises and workout templates by id, check-ins / protein / device data by date — with the newer record winning
   each conflict. Session deletions carry a tombstone so they propagate instead of resurrecting.
   A brand-new install adopts the server copy wholesale, so connecting a second device **pulls**
   your data rather than overwriting it (and avoids duplicating the seed exercise library). The
@@ -229,7 +241,7 @@ js/plates.js          barbell plate calculator (lbs)
 js/charts.js          dependency-free SVG line/bar charts (Progress tab)
 js/recovery.js        source-agnostic recovery signal (journal now, Fitbit later)
 js/timer.js           rest timer (beep + vibrate)
-js/templates.js       starter session templates
+js/templates.js       seed workout templates (materialized into editable state on first load)
 js/sync.js            two-way sync client (REST, bearer-token)
 js/app.js             UI, router, all views & event handling
 manifest.webmanifest  PWA manifest

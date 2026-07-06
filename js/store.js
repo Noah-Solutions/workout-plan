@@ -1,4 +1,6 @@
 // store.js — persistent state, defaults, and seed library
+import { SEED_TEMPLATES } from './templates.js';
+
 const KEY = 'ct_state_v1';
 
 export const MUSCLES = ['Quads', 'Hamstrings', 'Glutes', 'Chest', 'Back', 'Shoulders', 'Biceps', 'Triceps', 'Core', 'Calves'];
@@ -12,10 +14,10 @@ export function uid() {
   return 'id' + Date.now().toString(36) + '_' + uidCounter.toString(36);
 }
 
-// Stable, name-derived ids for seed exercises. Two devices seeding the same
+// Stable, name-derived ids for seed records. Two devices seeding the same
 // library (or an existing user picking up newly-shipped lifts) generate the
 // SAME id, so record-level sync merges them instead of duplicating.
-function slug(name) { return 'sx_' + String(name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''); }
+function slug(prefix, name) { return prefix + String(name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''); }
 
 // Seed exercises are built from the plan's lifts plus a broad library of the
 // common barbell / dumbbell / machine / bodyweight movements people reach for.
@@ -23,7 +25,7 @@ function slug(name) { return 'sx_' + String(name).toLowerCase().replace(/[^a-z0-
 // (StrongLifts-style) flow: show target weight, tick sets, auto-progress or deload.
 function seedExercises() {
   const e = (name, pattern, muscles, repRange, targetRIR, weight, unit, workSets, increment) => ({
-    id: slug(name), name, pattern, muscles, type: 'strength',
+    id: slug('sx_', name), name, pattern, muscles, type: 'strength',
     repRange, targetRIR, unit: unit || 'lb',
     lastWeight: weight,          // last weight actually used
     targetWeight: weight,        // weight to lift NEXT session (what the guided screen shows)
@@ -76,7 +78,23 @@ function seedExercises() {
 
 function nowISO() { return new Date().toISOString(); }
 
+// Materialize the seed templates against an exercise library, StrongLifts-style:
+// each entry carries its own sets × reps (the program owns the scheme; the
+// exercise owns the progressing weight). Stable ids keep sync merge-safe.
+function seedTemplates(exercises) {
+  const byName = new Map((exercises || []).map((x) => [x.name.toLowerCase(), x]));
+  return SEED_TEMPLATES.map((t) => ({
+    id: slug('tpl_', t.name),
+    name: t.name, short: t.short || '', rotation: !!t.rotation, archived: false,
+    entries: t.exercises
+      .map((n) => byName.get(n.toLowerCase()))
+      .filter(Boolean)
+      .map((ex) => ({ exerciseId: ex.id, sets: ex.workSets || 3, reps: ex.repRange ? ex.repRange[0] : 5 })),
+  }));
+}
+
 function defaults() {
+  const exercises = seedExercises();
   return {
     version: 1,
     rev: 0,                 // bumped on every local mutation
@@ -90,8 +108,11 @@ function defaults() {
       maxHR: 190,
       barWeightLb: 45,                       // Olympic barbell
       platesLb: [45, 35, 25, 10, 5, 2.5],    // plates available per side (lbs)
-      restTimer: { enabled: true, seconds: 90, sound: true, vibrate: true },
-      nextWorkout: null,                     // one-shot rotation override (template name) or null
+      restTimer: { enabled: true, seconds: 90, failSeconds: 300, sound: true, vibrate: true },
+      // StrongLifts-style progression knobs: how many consecutive missed
+      // sessions before the weight deloads, and by what percentage.
+      progression: { failsBeforeDeload: 3, deloadPct: 10 },
+      nextWorkout: null,                     // one-shot rotation override (template id/name) or null
 
       targets: {
         setsPerMuscle: 10,     // growth target per muscle / week
@@ -101,7 +122,8 @@ function defaults() {
         patternTimesPerWeek: 2,
       },
     },
-    exercises: seedExercises(),
+    exercises,
+    templates: seedTemplates(exercises), // editable workout templates (the program)
     sessions: [],           // logged workouts
     proteinLog: {},         // 'YYYY-MM-DD' -> grams
     // daily recovery check-in. 'YYYY-MM-DD' -> {
@@ -135,6 +157,7 @@ export function load() {
       state.settings = Object.assign({}, d.settings, state.settings);
       state.settings.targets = Object.assign({}, d.settings.targets, state.settings.targets || {});
       state.settings.restTimer = Object.assign({}, d.settings.restTimer, state.settings.restTimer || {});
+      state.settings.progression = Object.assign({}, d.settings.progression, state.settings.progression || {});
       if (!state.settings.platesLb) state.settings.platesLb = d.settings.platesLb;
       if (state.settings.barWeightLb == null) state.settings.barWeightLb = d.settings.barWeightLb;
       state.proteinLog = state.proteinLog || {};
@@ -158,6 +181,11 @@ export function load() {
       seedExercises().forEach((se) => {
         if (!haveNames.has(se.name.toLowerCase())) state.exercises.push(se);
       });
+      // migrate pre-template states: materialize the seed program against the
+      // user's (possibly customized) library, resolving by exercise name
+      if (!Array.isArray(state.templates) || !state.templates.length) {
+        state.templates = seedTemplates(state.exercises);
+      }
       if (state.rev == null) state.rev = 0;
       // Backfill ONLY for pre-schema states missing the key entirely (they have real
       // data -> treat as current). A present-but-empty '' means a fresh, unmodified
@@ -212,6 +240,7 @@ function adoptRemote(remote) {
   const s = get();
   if (Array.isArray(remote.sessions)) s.sessions = remote.sessions;
   if (Array.isArray(remote.exercises)) s.exercises = remote.exercises;
+  if (Array.isArray(remote.templates) && remote.templates.length) s.templates = remote.templates;
   if (remote.proteinLog && typeof remote.proteinLog === 'object') s.proteinLog = remote.proteinLog;
   if (remote.journal && typeof remote.journal === 'object') s.journal = remote.journal;
   if (remote.fitbit && typeof remote.fitbit === 'object') s.fitbit = remote.fitbit;
@@ -283,6 +312,7 @@ export function mergeRemote(remote) {
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1
       : (a.startedAt || a.loggedAt || '') < (b.startedAt || b.loggedAt || '') ? -1 : 1));
   s.exercises = mergeById(s.exercises, remote.exercises, '_u');
+  s.templates = mergeById(s.templates, remote.templates, '_u');
 
   // merge date-keyed maps; `stampKey` null -> conflicts fall back to overall-newer side
   const mergeByDate = (localMap, remoteMap, stampKey, preferRemoteOnConflict) => {
@@ -352,6 +382,9 @@ export function importJSON(text) {
   state.journal = state.journal || {};
   state.fitbit = state.fitbit || {};
   state.deleted = state.deleted || {};
+  if (!Array.isArray(state.templates) || !state.templates.length) {
+    state.templates = seedTemplates(state.exercises || []);
+  }
   save();
   return state;
 }
@@ -364,4 +397,11 @@ export function resetAll() {
 
 export function exerciseById(id) {
   return get().exercises.find((x) => x.id === id);
+}
+
+export function templates() {
+  return (get().templates || []).filter((t) => !t.archived);
+}
+export function templateById(id) {
+  return (get().templates || []).find((t) => t.id === id);
 }

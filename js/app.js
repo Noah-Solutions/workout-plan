@@ -8,7 +8,6 @@ import {
   proteinTarget, ACTIVITY_MAP, isHardSet, entryExercise,
 } from './week.js';
 import { suggestNext, commitExerciseState, fmtWeight, lastPerformance, guidedTarget, applyWorkoutResult, warmupSets } from './progression.js';
-import { TEMPLATES } from './templates.js';
 import { platesLabel, platesFor } from './plates.js';
 import { lineChart, barChart, legend, mountTips } from './charts.js';
 import { dailyRecovery, difficultyToScore, hasDeviceData, recoveryDates, readiness, rhrBaseline } from './recovery.js';
@@ -194,7 +193,11 @@ function renderToday() {
   `;
 
   const startBtn = document.getElementById('heroStart');
-  if (startBtn) startBtn.addEventListener('click', () => startWorkout(nextTemplate()));
+  if (startBtn) startBtn.addEventListener('click', () => { const t = nextTemplate(); if (t) startWorkout(t); });
+  const editBtn = document.getElementById('heroEdit');
+  if (editBtn) editBtn.addEventListener('click', () => workoutEditor(editBtn.dataset.tplEdit, () => renderToday()));
+  const newTplBtn = document.getElementById('heroNewTpl');
+  if (newTplBtn) newTplBtn.addEventListener('click', () => workoutEditor(null, () => renderToday()));
   viewEl.querySelectorAll('[data-prog]').forEach((b) => b.addEventListener('click', () => {
     setNextWorkout(b.dataset.prog); haptic(8); renderToday();
   }));
@@ -379,18 +382,27 @@ function renderPlan() {
 }
 
 // ---- "Next workout" hero (StrongLifts-style home) ----
-// The recurring program = templates flagged `rotation`. The "next" day advances
-// from the last one logged; a one-shot manual override (settings.nextWorkout)
+// The program = editable templates in state (Setup → Workouts / ✎ on the hero).
+// Those flagged `rotation` form the recurring cycle; the "next" day advances
+// from the last one logged, and a one-shot manual override (settings.nextWorkout)
 // wins so you can jump straight to any day in the program.
 function rotationTemplates() {
-  const rot = TEMPLATES.filter((t) => t.rotation);
-  return rot.length ? rot : TEMPLATES.slice(0, 2);
+  const all = store.templates();
+  const rot = all.filter((t) => t.rotation);
+  return rot.length ? rot : all;
+}
+// A template's entries resolved to live exercises (missing/archived skipped).
+function templateEntries(tpl) {
+  return (tpl && tpl.entries || [])
+    .map((en) => ({ ...en, ex: exerciseById(en.exerciseId) }))
+    .filter((o) => o.ex && !o.ex.archived);
 }
 function nextTemplate() {
   const rot = rotationTemplates();
+  if (!rot.length) return null;
   const override = get().settings.nextWorkout;
   if (override) {
-    const t = TEMPLATES.find((x) => x.name === override);
+    const t = store.templates().find((x) => x.id === override || x.name === override);
     if (t) return t;
   }
   const strengths = get().sessions.filter((s) => s.kind === 'strength' && s.templateName);
@@ -422,24 +434,31 @@ function lastPerfLabel(ex) {
 
 function nextWorkoutHeroHTML() {
   const tpl = nextTemplate();
+  if (!tpl) {
+    return h`<div class="hero">
+      <div class="hero__eyebrow">Next workout</div>
+      <div class="hero__title">No workouts yet</div>
+      <p class="small muted">Create a workout to get a guided session with targets and auto-progression.</p>
+      <button class="btn btn--accent hero__start" id="heroNewTpl">＋ Create a workout</button>
+    </div>`;
+  }
   const rot = rotationTemplates();
-  const exs = tpl.exercises
-    .map((name) => get().exercises.find((e) => e.name.toLowerCase() === name.toLowerCase() && !e.archived))
-    .filter(Boolean);
-  const rows = exs.map((ex) => {
+  const entries = templateEntries(tpl);
+  const rows = entries.map((en) => {
+    const ex = en.ex;
     const t = guidedTarget(ex);
     const up = (ex.unit === 'lb' || ex.unit === 'kg') && t.weight > (ex.lastWeight || 0) && (ex.lastWeight || 0) > 0;
     const lp = lastPerfLabel(ex);
     return h`<div class="hero-ex">
       <span class="hero-ex__name">${esc(ex.name)}${lp ? `<span class="hero-ex__last">last ${esc(lp.body)}</span>` : ''}</span>
-      <span class="hero-ex__scheme">${t.sets}×${t.reps}</span>
+      <span class="hero-ex__scheme">${en.sets}×${en.reps}</span>
       <span class="hero-ex__wt">${up ? '<span class="hero-ex__up">▲</span>' : ''}${fmtWeight(t.weight, t.unit)}</span>
     </div>`;
   }).join('');
   // Program strip — shows the whole rotation and where you are; tap to jump.
   const strip = rot.length > 1 ? h`<div class="hero__rotation" role="tablist" aria-label="Program">
-    ${rot.map((t) => h`<button class="rotchip ${t.name === tpl.name ? 'is-next' : ''}" data-prog="${esc(t.name)}"
-        title="${esc(t.name)}">${esc(t.short || t.name)}${t.name === tpl.name ? '<span class="rotchip__badge">NEXT</span>' : ''}</button>`).join('')}
+    ${rot.map((t) => h`<button class="rotchip ${t.id === tpl.id ? 'is-next' : ''}" data-prog="${esc(t.id)}"
+        title="${esc(t.name)}">${esc(t.short || t.name)}${t.id === tpl.id ? '<span class="rotchip__badge">NEXT</span>' : ''}</button>`).join('')}
   </div>` : '';
   return h`<div class="hero">
     <div class="hero__top">
@@ -447,7 +466,7 @@ function nextWorkoutHeroHTML() {
         <div class="hero__eyebrow">Next workout</div>
         <div class="hero__title">${esc(tpl.name)}</div>
       </div>
-      <span class="hero__badge">${exs.length} lift${exs.length === 1 ? '' : 's'}</span>
+      <button class="iconbtn hero__edit" id="heroEdit" aria-label="Edit workout" data-tpl-edit="${esc(tpl.id)}">✎</button>
     </div>
     ${strip}
     <div class="hero__exs">${rows}</div>
@@ -554,7 +573,7 @@ function openLogSheet(date) {
     <div class="logchoice">
       <button class="logchoice__btn logchoice__btn--hero" data-log="guided">
         <span class="logchoice__ico">🏋️</span>
-        <span><span class="logchoice__t">Guided workout</span><span class="logchoice__d">Next up: ${esc(tpl.name)} — targets set, rest timer, auto-progression</span></span>
+        <span><span class="logchoice__t">Guided workout</span><span class="logchoice__d">${tpl ? `Next up: ${esc(tpl.name)} — ` : ''}targets set, rest timer, auto-progression</span></span>
       </button>
       <button class="logchoice__btn" data-log="strength">
         <span class="logchoice__ico">📝</span>
@@ -592,35 +611,41 @@ function openLogSheet(date) {
   }));
 }
 
+// Short description of a template = its exercise names.
+function templateDesc(tpl) {
+  return templateEntries(tpl).map((en) => en.ex.name).join(' · ') || 'Empty workout';
+}
+
 function templatePickerForWorkout() {
-  const body = TEMPLATES.map((t, i) => h`<div class="ex-pick" data-tpl="${i}">
-    <div><div class="ex-pick__name">${esc(t.name)}</div><div class="ex-pick__meta">${esc(t.desc)}</div></div>
+  const body = store.templates().map((t) => h`<div class="ex-pick" data-tpl="${esc(t.id)}">
+    <div><div class="ex-pick__name">${esc(t.name)}</div><div class="ex-pick__meta">${esc(templateDesc(t))}</div></div>
     <span class="linkbtn">Start</span>
-  </div>`).join('');
+  </div>`).join('') + `<button class="btn btn--ghost mt" id="newTplFromPicker" style="width:100%">＋ New workout</button>`;
   openModal('Choose a workout', body);
   modalRoot.querySelectorAll('[data-tpl]').forEach((el) => el.addEventListener('click', () => {
-    closeModal(); startWorkout(TEMPLATES[el.dataset.tpl]);
+    const t = store.templateById(el.dataset.tpl);
+    if (t) { closeModal(); startWorkout(t); }
   }));
+  document.getElementById('newTplFromPicker').addEventListener('click', () => {
+    closeModal(); workoutEditor(null, () => render());
+  });
 }
 
 // ================= GUIDED WORKOUT (StrongLifts-style) =================
 function startWorkout(tpl) {
-  const exs = tpl.exercises
-    .map((name) => get().exercises.find((e) => e.name.toLowerCase() === name.toLowerCase() && !e.archived))
-    .filter(Boolean);
   workout = {
     templateName: tpl.name,
     date: todayISO(),
     startedAt: new Date().toISOString(),
-    exercises: exs.map((ex) => {
-      const t = guidedTarget(ex);
+    exercises: templateEntries(tpl).map((en) => {
+      const t = guidedTarget(en.ex);
       return {
-        exerciseId: ex.id,
+        exerciseId: en.ex.id,
         weight: t.weight,
-        targetReps: t.reps,
+        targetReps: en.reps,     // the template's scheme, not the exercise default
         unit: t.unit,
         increment: t.increment,
-        sets: Array.from({ length: t.sets }, () => ({ reps: t.reps, done: false })),
+        sets: Array.from({ length: en.sets }, () => ({ reps: en.reps, done: false })),
         warmDone: [],   // ephemeral warm-up completion flags (not saved)
         difficulty: null,
       };
@@ -701,7 +726,16 @@ function renderWorkout() {
     const st = workout.exercises[wi].sets[si];
     const tr = workout.exercises[wi].targetReps;
     if (!st.done) { st.done = true; st.reps = tr; timer.start(); haptic(15); }
-    else if (st.reps > 0) { st.reps -= 1; haptic(8); }
+    else if (st.reps > 0) {
+      st.reps -= 1;
+      // StrongLifts-style adaptive rest: a missed set earns a longer break so
+      // the next attempt has full energy stores. Fires on the first decrement.
+      if (st.reps === tr - 1) {
+        const rt = get().settings.restTimer || {};
+        if (rt.enabled !== false) timer.start(rt.failSeconds || 300);
+      }
+      haptic(8);
+    }
     else { st.done = false; st.reps = tr; }
     renderWorkout();
   }));
@@ -790,7 +824,11 @@ function finishWorkout() {
       }));
       let outcome = null;
       if (ex) {
-        outcome = applyWorkoutResult(ex, sets, w.difficulty);
+        // judge success against what THIS workout prescribed (the template's
+        // sets×reps), not the exercise's default scheme
+        outcome = applyWorkoutResult(ex, sets, w.difficulty, {
+          sets: w.sets.length, reps: w.targetReps, weight: w.unit === 'bw' ? 0 : w.weight,
+        });
         ex._u = now; // per-record stamp for merge sync
       }
       if (ex && outcome) summary.push({ name: ex.name, ...outcome, unit: w.unit });
@@ -817,8 +855,8 @@ function showWorkoutSummary(summary) {
     let pill, detail;
     if (o.byReps) { pill = `<span class="pill pill--up">▲ Progress</span>`; detail = 'Add reps next time'; }
     else if (o.outcome === 'progress') { pill = `<span class="pill pill--up">▲ +${o.delta}</span>`; detail = `${fmtWeight(o.from, o.unit)} → <b>${fmtWeight(o.to, o.unit)}</b>`; }
-    else if (o.outcome === 'deload') { pill = `<span class="pill pill--rep">▼ Deload</span>`; detail = `${fmtWeight(o.from, o.unit)} → <b>${fmtWeight(o.to, o.unit)}</b> (3 misses)`; }
-    else { pill = `<span class="pill pill--hold">Hold</span>`; detail = `Repeat ${fmtWeight(o.to, o.unit)}${o.fails ? ` · miss ${o.fails}/3` : ''}`; }
+    else if (o.outcome === 'deload') { pill = `<span class="pill pill--rep">▼ Deload</span>`; detail = `${fmtWeight(o.from, o.unit)} → <b>${fmtWeight(o.to, o.unit)}</b> (${o.failLimit || 3} misses)`; }
+    else { pill = `<span class="pill pill--hold">Hold</span>`; detail = `Repeat ${fmtWeight(o.to, o.unit)}${o.fails ? ` · miss ${o.fails}/${o.failLimit || 3}` : ''}`; }
     const prTag = o.pr ? '<span class="pr-tag">🏆 PR</span> ' : '';
     return h`<div class="suggest"><div><div class="suggest__name">${prTag}${esc(o.name)}</div><div class="suggest__detail">${detail}</div></div>${pill}</div>`;
   }).join('');
@@ -1015,21 +1053,25 @@ function exercisePicker() {
 }
 
 function templatePicker() {
-  const body = TEMPLATES.map((t, i) => h`<div class="ex-pick" data-tpl="${i}">
-    <div><div class="ex-pick__name">${esc(t.name)}</div><div class="ex-pick__meta">${esc(t.desc)}</div></div>
+  const body = store.templates().map((t) => h`<div class="ex-pick" data-tpl="${esc(t.id)}">
+    <div><div class="ex-pick__name">${esc(t.name)}</div><div class="ex-pick__meta">${esc(templateDesc(t))}</div></div>
     <span class="linkbtn">Load</span>
   </div>`).join('');
   openModal('Start from a template', body + `<p class="muted small mt">Templates pre-fill exercises with your auto-progression targets. You can edit, add, or remove anything.</p>`);
   modalRoot.querySelectorAll('[data-tpl]').forEach((el) => el.addEventListener('click', () => {
-    applyTemplate(TEMPLATES[el.dataset.tpl]); closeModal(); renderStrengthDraft();
+    const t = store.templateById(el.dataset.tpl);
+    if (t) applyTemplate(t);
+    closeModal(); renderStrengthDraft();
   }));
 }
 
 function applyTemplate(tpl) {
   draft.entries = [];
-  tpl.exercises.forEach((name) => {
-    let ex = get().exercises.find((e) => e.name.toLowerCase() === name.toLowerCase() && !e.archived);
-    if (ex) addExerciseToDraft(ex);
+  templateEntries(tpl).forEach((en) => {
+    const sug = suggestNext(en.ex);
+    const sets = [];
+    for (let i = 0; i < en.sets; i++) sets.push({ weight: en.ex.unit === 'bw' ? '' : (sug.weight || ''), reps: '', rir: en.ex.targetRIR });
+    draft.entries.push({ exerciseId: en.ex.id, sets });
   });
 }
 
@@ -2308,10 +2350,24 @@ function renderSetup() {
     </div>
 
     <div class="card">
+      <div class="card__title"><h2>Workouts</h2><button class="linkbtn" id="addTpl">＋ New</button></div>
+      <div id="tplList"></div>
+      <p class="small muted mt" style="margin-bottom:0">Your program. Tap one to add, replace, reorder or re-scheme its exercises — changes apply from the next session.</p>
+    </div>
+
+    <div class="card">
       <div class="card__title"><h2>Workout & rest timer</h2></div>
       <div class="field-row">
         <label class="field"><span>Barbell weight (lb)</span><input type="number" id="wBar" value="${s.settings.barWeightLb}" /></label>
         <label class="field"><span>Rest timer (sec)</span><input type="number" id="wRest" value="${s.settings.restTimer.seconds}" /></label>
+      </div>
+      <div class="field-row">
+        <label class="field"><span>Rest after missed set (sec)</span><input type="number" id="wRestFail" value="${s.settings.restTimer.failSeconds}" /></label>
+        <label class="field"><span>&nbsp;</span><span class="small muted" style="display:block;padding-top:12px">longer break after a fail</span></label>
+      </div>
+      <div class="field-row">
+        <label class="field"><span>Deload after (missed sessions)</span><input type="number" id="pFails" value="${s.settings.progression.failsBeforeDeload}" /></label>
+        <label class="field"><span>Deload by (%)</span><input type="number" id="pDeload" value="${s.settings.progression.deloadPct}" /></label>
       </div>
       <label class="field" style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
         <input type="checkbox" id="wTimerOn" ${s.settings.restTimer.enabled ? 'checked' : ''} style="width:auto"> <span style="margin:0">Auto-start rest timer after each set</span></label>
@@ -2368,8 +2424,10 @@ function renderSetup() {
     </div>
     <p class="center small muted">Concurrent Trainer · built from your evidence-based plan</p>
   `;
+  renderTplList();
   renderLibList();
   wireSyncCard();
+  document.getElementById('addTpl').addEventListener('click', () => workoutEditor(null, () => renderSetup()));
 
   document.getElementById('saveSettings').addEventListener('click', () => {
     update((st) => {
@@ -2383,6 +2441,9 @@ function renderSetup() {
       st.settings.targets.intervalSessionsWeek = Number(document.getElementById('tInt').value) || t.intervalSessionsWeek;
       st.settings.barWeightLb = Number(document.getElementById('wBar').value) || st.settings.barWeightLb;
       st.settings.restTimer.seconds = Number(document.getElementById('wRest').value) || st.settings.restTimer.seconds;
+      st.settings.restTimer.failSeconds = Number(document.getElementById('wRestFail').value) || st.settings.restTimer.failSeconds;
+      st.settings.progression.failsBeforeDeload = Math.max(1, Number(document.getElementById('pFails').value) || st.settings.progression.failsBeforeDeload);
+      st.settings.progression.deloadPct = Math.min(50, Math.max(1, Number(document.getElementById('pDeload').value) || st.settings.progression.deloadPct));
       st.settings.restTimer.enabled = document.getElementById('wTimerOn').checked;
       st.settings.restTimer.sound = document.getElementById('wSound').checked;
       st.settings.restTimer.vibrate = document.getElementById('wVibe').checked;
@@ -2403,6 +2464,19 @@ function renderSetup() {
   });
 }
 
+function renderTplList() {
+  const list = document.getElementById('tplList');
+  if (!list) return;
+  const tpls = store.templates();
+  list.innerHTML = tpls.length ? tpls.map((t) => h`<div class="ex-pick" data-tpledit="${esc(t.id)}">
+    <div><div class="ex-pick__name"><span class="tplcode">${esc(t.short || '·')}</span> ${esc(t.name)}
+      ${t.rotation ? '<span class="tag">rotation</span>' : ''}</div>
+    <div class="ex-pick__meta">${esc(templateEntries(t).map((en) => `${en.ex.name} ${en.sets}×${en.reps}`).join(' · ')) || 'Empty'}</div></div>
+    <span class="linkbtn">Edit</span>
+  </div>`).join('') : '<div class="muted small">No workouts yet — create one.</div>';
+  list.querySelectorAll('[data-tpledit]').forEach((el) => el.addEventListener('click', () => workoutEditor(el.dataset.tpledit, () => renderSetup())));
+}
+
 function renderLibList() {
   const list = document.getElementById('libList');
   const exs = get().exercises.filter((e) => !e.archived);
@@ -2412,6 +2486,142 @@ function renderLibList() {
     <span class="linkbtn">Edit</span>
   </div>`).join('');
   list.querySelectorAll('[data-edit]').forEach((el) => el.addEventListener('click', () => exerciseEditor(el.dataset.edit, () => renderSetup())));
+}
+
+// ---- workout (template) editor — StrongLifts-style program editing ----
+// Add / remove / replace / reorder exercises and set each one's sets × reps.
+// Changes persist to the program: the next time this workout comes up it uses
+// the edited scheme. Replacing keeps sets & reps and suggests same-pattern
+// variations first (like StrongLifts' "similar results" list).
+function pickExerciseModal(title, preferPattern, excludeIds, cb) {
+  const exs = get().exercises.filter((e) => !e.archived && e.type === 'strength' && !(excludeIds || []).includes(e.id));
+  const groups = {};
+  exs.forEach((e) => { (groups[e.pattern] = groups[e.pattern] || []).push(e); });
+  let order = ['squat', 'hinge', 'push', 'pull', 'core', 'other'];
+  if (preferPattern && groups[preferPattern]) order = [preferPattern, ...order.filter((p) => p !== preferPattern)];
+  const row = (e) => h`<div class="ex-pick" data-pick="${e.id}">
+    <div><div class="ex-pick__name">${esc(e.name)}</div>
+    <div class="ex-pick__meta">${e.muscles.join(', ')} · ${fmtWeight(guidedTarget(e).weight, e.unit)}</div></div>
+    <span class="linkbtn">${preferPattern ? 'Swap' : 'Add'}</span></div>`;
+  const body = order.filter((p) => groups[p]).map((p, i) => h`
+    <div class="section-label">${PATTERN_LABEL[p]}${preferPattern && p === preferPattern && i === 0 ? ' · similar' : ''}</div>
+    ${groups[p].map(row).join('')}
+  `).join('') + `<button class="btn btn--ghost mt" id="pickNewEx" style="width:100%">＋ Create new exercise</button>`;
+  openModal(title, body);
+  modalRoot.querySelectorAll('[data-pick]').forEach((el) => el.addEventListener('click', () => {
+    cb(exerciseById(el.dataset.pick));
+  }));
+  document.getElementById('pickNewEx').addEventListener('click', () => {
+    closeModal(); exerciseEditor(null, (ex) => cb(ex));
+  });
+}
+
+function workoutEditor(id, onDone) {
+  const t0 = id ? store.templateById(id) : null;
+  const work = t0
+    ? { name: t0.name, short: t0.short || '', rotation: !!t0.rotation, entries: (t0.entries || []).map((en) => ({ ...en })) }
+    : { name: '', short: '', rotation: true, entries: [] };
+
+  const paint = () => {
+    const rows = work.entries.map((en, i) => {
+      const ex = exerciseById(en.exerciseId);
+      if (!ex) return '';
+      return h`<div class="tplrow">
+        <div class="tplrow__move">
+          <button class="tplrow__mv" data-mv="${i}:-1" ${i === 0 ? 'disabled' : ''}>▲</button>
+          <button class="tplrow__mv" data-mv="${i}:1" ${i === work.entries.length - 1 ? 'disabled' : ''}>▼</button>
+        </div>
+        <div class="tplrow__body">
+          <div class="tplrow__name">${esc(ex.name)}</div>
+          <div class="small muted">${fmtWeight(guidedTarget(ex).weight, ex.unit)} · ${PATTERN_LABEL[ex.pattern] || ex.pattern}</div>
+        </div>
+        <input type="number" inputmode="numeric" class="tplrow__n" data-sets="${i}" value="${en.sets}" min="1" aria-label="Sets" />
+        <span class="tplrow__x">×</span>
+        <input type="number" inputmode="numeric" class="tplrow__n" data-reps="${i}" value="${en.reps}" min="1" aria-label="Reps" />
+        <button class="tplrow__act" data-swap="${i}" aria-label="Replace">⇄</button>
+        <button class="tplrow__act tplrow__act--del" data-del="${i}" aria-label="Remove">×</button>
+      </div>`;
+    }).join('');
+
+    openModal(t0 ? 'Edit workout' : 'New workout', h`
+      <div class="field-row" style="grid-template-columns:1fr 84px">
+        <label class="field"><span>Name</span><input id="tplName" value="${esc(work.name)}" placeholder="e.g. Full Body C" /></label>
+        <label class="field"><span>Code</span><input id="tplShort" maxlength="2" value="${esc(work.short)}" placeholder="C" autocapitalize="characters" /></label>
+      </div>
+      <label class="field" style="display:flex;align-items:center;gap:10px">
+        <input type="checkbox" id="tplRot" ${work.rotation ? 'checked' : ''} style="width:auto">
+        <span style="margin:0">In the rotation (cycles on the home screen)</span></label>
+      <div class="section-label" style="margin-top:4px">Exercises · sets × reps</div>
+      ${rows || '<div class="muted small mb">No exercises yet — add your first below.</div>'}
+      <button class="btn btn--ghost btn--sm mb" id="tplAdd" style="width:100%">＋ Add exercise</button>
+      <p class="small muted" style="margin:0 0 12px">Sets × reps live in the workout (e.g. Deadlift 1×5); the weight progresses on the exercise itself. ⇄ swaps in a variation and keeps the scheme.</p>
+      <div class="btn-row">
+        ${t0 ? '<button class="btn btn--danger btn--sm" id="tplDel">Delete</button>' : ''}
+        <button class="btn btn--primary" id="tplSave">Save workout</button>
+      </div>
+    `);
+
+    document.getElementById('tplName').addEventListener('input', (e) => { work.name = e.target.value; });
+    document.getElementById('tplShort').addEventListener('input', (e) => { work.short = e.target.value.toUpperCase(); });
+    document.getElementById('tplRot').addEventListener('change', (e) => { work.rotation = e.target.checked; });
+    modalRoot.querySelectorAll('[data-sets]').forEach((el) => el.addEventListener('input', () => {
+      work.entries[el.dataset.sets].sets = Math.max(1, Number(el.value) || 1);
+    }));
+    modalRoot.querySelectorAll('[data-reps]').forEach((el) => el.addEventListener('input', () => {
+      work.entries[el.dataset.reps].reps = Math.max(1, Number(el.value) || 1);
+    }));
+    modalRoot.querySelectorAll('[data-mv]').forEach((el) => el.addEventListener('click', () => {
+      const [i, d] = el.dataset.mv.split(':').map(Number);
+      const j = i + d;
+      if (j < 0 || j >= work.entries.length) return;
+      [work.entries[i], work.entries[j]] = [work.entries[j], work.entries[i]];
+      haptic(8); paint();
+    }));
+    modalRoot.querySelectorAll('[data-del]').forEach((el) => el.addEventListener('click', () => {
+      work.entries.splice(el.dataset.del, 1); haptic(8); paint();
+    }));
+    modalRoot.querySelectorAll('[data-swap]').forEach((el) => el.addEventListener('click', () => {
+      const i = Number(el.dataset.swap);
+      const cur = exerciseById(work.entries[i].exerciseId);
+      pickExerciseModal(`Replace ${cur ? cur.name : 'exercise'}`, cur ? cur.pattern : null,
+        work.entries.map((en) => en.exerciseId), (ex) => {
+          work.entries[i].exerciseId = ex.id; // sets × reps stay, like StrongLifts
+          paint();
+        });
+    }));
+    document.getElementById('tplAdd').addEventListener('click', () => {
+      pickExerciseModal('Add exercise', null, work.entries.map((en) => en.exerciseId), (ex) => {
+        work.entries.push({ exerciseId: ex.id, sets: ex.workSets || 3, reps: ex.repRange ? ex.repRange[0] : 5 });
+        paint();
+      });
+    });
+    document.getElementById('tplSave').addEventListener('click', () => {
+      const name = work.name.trim();
+      if (!name) { toast('Name the workout'); return; }
+      if (!work.entries.length) { toast('Add at least one exercise'); return; }
+      const short = (work.short || name[0]).toUpperCase().slice(0, 2);
+      const now = new Date().toISOString();
+      update((s) => {
+        if (t0) {
+          const t = s.templates.find((x) => x.id === t0.id);
+          if (t) Object.assign(t, { name, short, rotation: work.rotation, entries: work.entries, _u: now });
+        } else {
+          s.templates.push({ id: uid(), name, short, rotation: work.rotation, archived: false, entries: work.entries, _u: now });
+        }
+      });
+      closeModal(); toast('Workout saved'); onDone && onDone();
+    });
+    if (t0) document.getElementById('tplDel').addEventListener('click', () => {
+      const now = new Date().toISOString();
+      update((s) => {
+        const t = s.templates.find((x) => x.id === t0.id);
+        if (t) { t.archived = true; t._u = now; }
+        if (s.settings.nextWorkout === t0.id || s.settings.nextWorkout === t0.name) s.settings.nextWorkout = null;
+      });
+      closeModal(); toast('Workout removed'); onDone && onDone();
+    });
+  };
+  paint();
 }
 
 function exerciseEditor(id, onSave) {

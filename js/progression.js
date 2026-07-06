@@ -139,9 +139,12 @@ const DIFFICULTY = ['easy', 'good', 'hard', 'failed'];
 // exercise in place. Returns { outcome, from, to, delta } for the summary.
 //   success  = every work set met the target reps AND difficulty !== 'failed'
 //   success  -> +increment (double if "easy"); reset fail streak
-//   miss     -> repeat weight; +1 fail streak; at 3 fails -> deload 10% (reset streak)
-export function applyWorkoutResult(ex, sets, difficulty) {
-  const tgt = guidedTarget(ex);
+//   miss     -> repeat weight; +1 fail streak; after N fails -> deload X%
+//              (N and X are the StrongLifts-style knobs in settings.progression)
+// `target` (optional) = the workout's actual prescription { sets, reps, weight }
+// — templates can override the exercise's default scheme (e.g. Deadlift 1×5).
+export function applyWorkoutResult(ex, sets, difficulty, target) {
+  const tgt = Object.assign(guidedTarget(ex), target || {});
   const working = (sets || []).filter((st) => Number(st.reps) > 0);
   const usedWeight = ex.unit === 'bw' || ex.unit === 'sec'
     ? tgt.weight
@@ -176,14 +179,17 @@ export function applyWorkoutResult(ex, sets, difficulty) {
     return { outcome: 'progress', from, to: ex.targetWeight, delta: ex.targetWeight - from, pr };
   }
 
+  const prog = get().settings.progression || {};
+  const failLimit = Math.max(1, Number(prog.failsBeforeDeload) || 3);
+  const deloadPct = Math.min(50, Math.max(1, Number(prog.deloadPct) || 10));
   ex.failStreak = (ex.failStreak || 0) + 1;
-  if (ex.failStreak >= 3) {
+  if (ex.failStreak >= failLimit) {
     ex.failStreak = 0;
-    ex.targetWeight = roundToStep(usedWeight * 0.9, ex.unit);
-    return { outcome: 'deload', from, to: ex.targetWeight, delta: ex.targetWeight - from };
+    ex.targetWeight = roundToStep(usedWeight * (1 - deloadPct / 100), ex.unit);
+    return { outcome: 'deload', from, to: ex.targetWeight, delta: ex.targetWeight - from, failLimit };
   }
   ex.targetWeight = usedWeight; // repeat same weight next time
-  return { outcome: 'hold', from, to: usedWeight, delta: 0, fails: ex.failStreak };
+  return { outcome: 'hold', from, to: usedWeight, delta: 0, fails: ex.failStreak, failLimit };
 }
 
 function roundToStep(w, unit) {
