@@ -2312,8 +2312,8 @@ function renderSetup() {
     <div class="card">
       <div class="card__title"><h2>Priority when compressed</h2></div>
       <ol class="small" style="padding-left:18px;margin:0;line-height:1.8">
-        <li><b>Full Body A</b> — protects strength/muscle</li>
-        <li><b>Full Body B</b> — each pattern hit 2×</li>
+        <li><b>Workout A</b> — protects strength/muscle</li>
+        <li><b>Workout B</b> — each pattern hit 2×</li>
         <li><b>One interval session</b> — best cardio ROI/min</li>
         <li><b>Zone 2</b> — valuable, easiest to swap for daily activity</li>
       </ol>

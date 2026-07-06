@@ -2,14 +2,14 @@
 // Names must match exercises in the library; unmatched names are skipped.
 export const TEMPLATES = [
   {
-    name: 'Full Body A — Squat focus',
-    desc: 'Squat · Bench · Row · Curl · Plank',
-    exercises: ['Back Squat', 'Bench Press', 'Barbell Row', 'Barbell Curl', 'Plank'],
+    name: 'Workout A — Squat focus',
+    desc: 'Squat · Row · Bench · Pull-up · Pushdown · Plank',
+    exercises: ['Back Squat', 'Barbell Row', 'Bench Press', 'Pull-up', 'Triceps Pushdown', 'Plank'],
   },
   {
-    name: 'Full Body B — Hinge focus',
-    desc: 'RDL · Overhead Press · Pull-up · Leg Curl · Plank',
-    exercises: ['Romanian Deadlift', 'Overhead Press', 'Pull-up', 'Leg Curl', 'Plank'],
+    name: 'Workout B — Hinge focus',
+    desc: 'RDL · Overhead Press · Curl · Leg Curl · Plank',
+    exercises: ['Romanian Deadlift', 'Overhead Press', 'Barbell Curl', 'Leg Curl', 'Plank'],
   },
   {
     name: 'Upper A',

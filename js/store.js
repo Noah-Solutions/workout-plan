@@ -58,6 +58,69 @@ const SEED_RECAL = {
   'Barbell Curl': [45, 30],
 };
 
+// One-time import of the Workout A logged in the user's previous tracker on
+// Jul 5, 2026, so history, weekly stats and progression pick up from what was
+// actually lifted. Fixed id + timestamps keep it stable across devices: merge
+// sync dedupes it by id, and a deletion tombstone outranks the fixed updatedAt,
+// so deleting it once deletes it everywhere. Exercise targets are only synced
+// for lifts with no in-app history (same safety rule as the recalibration);
+// completing all sets counts as a success, so next targets get +1 increment.
+const IMPORT_WA = {
+  id: 'import-wa-2026-07-05',
+  date: '2026-07-05',
+  stamp: '2026-07-05T20:00:00.000Z',
+  templateName: 'Workout A — Squat focus',
+  lifts: [
+    // [exercise, work sets, reps, weight, next target]
+    ['Back Squat', 5, 5, 115, 125],
+    ['Barbell Row', 5, 5, 95, 100],
+    ['Bench Press', 5, 5, 105, 110],
+    ['Pull-up', 3, 8, 75, 80],
+    ['Triceps Pushdown', 3, 8, 55, 60],
+    ['Plank', 3, 30, 0, null],
+  ],
+};
+
+function importLoggedWorkoutA(s) {
+  if (s.importWaV1) return false;
+  s.importWaV1 = true;
+  if ((s.sessions || []).some((x) => x.id === IMPORT_WA.id) || (s.deleted || {})[IMPORT_WA.id]) return false;
+  const logged = new Set();
+  (s.sessions || []).forEach((sess) => (sess.entries || []).forEach((en) => logged.add(en.exerciseId)));
+  const entries = [];
+  IMPORT_WA.lifts.forEach(([name, nSets, reps, weight, next]) => {
+    const ex = (s.exercises || []).find((e) => e.name === name && !e.archived);
+    if (!ex) return;
+    if (!logged.has(ex.id)) {
+      // reshape lifts the seed library had wrong: pull-ups are done weighted
+      // (assisted stack / added load) at 3x8, pushdowns at 3x8
+      if (name === 'Pull-up') { ex.unit = 'lb'; ex.repRange = [8, 12]; ex.workSets = 3; ex.increment = 5; }
+      if (name === 'Triceps Pushdown') ex.repRange = [8, 12];
+      if (next != null) {
+        ex.lastWeight = weight;
+        ex.bestWeight = Math.max(ex.bestWeight || 0, weight);
+        ex.targetWeight = next;
+        ex.failStreak = 0;
+        ex._u = IMPORT_WA.stamp;
+      }
+    }
+    entries.push({
+      exerciseId: ex.id,
+      exSnapshot: { name: ex.name, muscles: ex.muscles, pattern: ex.pattern, unit: ex.unit },
+      target: { sets: nSets, reps, weight },
+      sets: Array.from({ length: nSets }, () => ({ weight, target: reps, reps, rir: 2, completed: true })),
+      difficulty: 'good',
+    });
+  });
+  if (!entries.length) return false;
+  s.sessions.push({
+    id: IMPORT_WA.id, kind: 'strength', date: IMPORT_WA.date, templateName: IMPORT_WA.templateName,
+    entries, note: 'Imported from previous tracker', loggedAt: IMPORT_WA.stamp, updatedAt: IMPORT_WA.stamp,
+  });
+  s.sessions.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return true;
+}
+
 function recalibrateSeedWeights(s) {
   if (s.seedRecalV2) return false;
   s.seedRecalV2 = true;
@@ -156,7 +219,9 @@ export function load() {
       // data -> treat as current). A present-but-empty '' means a fresh, unmodified
       // install and must stay empty so it loses last-write-wins to server data.
       if (state.updatedAt === undefined) state.updatedAt = nowISO();
-      if (recalibrateSeedWeights(state) && state.updatedAt) {
+      const recal = recalibrateSeedWeights(state);
+      const imported = importLoggedWorkoutA(state);
+      if ((recal || imported) && state.updatedAt) {
         // count as a real local change so the new targets sync out; skipped on a
         // never-modified install, which must keep losing last-write-wins.
         state.rev = (state.rev || 0) + 1;
@@ -165,6 +230,7 @@ export function load() {
       save(true);
     } else {
       state = defaults();
+      importLoggedWorkoutA(state);
       save(true);
     }
   } catch (err) {
