@@ -1,5 +1,5 @@
 // sw.js — offline app shell cache
-const CACHE = 'ct-v9';
+const CACHE = 'ct-v10';
 const ASSETS = [
   './',
   './index.html',

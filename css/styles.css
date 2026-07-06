@@ -47,7 +47,9 @@
   }
 }
 
-* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+/* touch-action: manipulation keeps scrolling but kills double-tap-to-zoom —
+   essential when hammering set circles; the viewport meta blocks pinch zoom. */
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 html, body { margin: 0; padding: 0; }
 body {
   background: var(--bg);
